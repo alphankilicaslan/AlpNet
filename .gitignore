@@ -1,0 +1,31 @@
+# Build and output directories
+bin/
+obj/
+[Bb]in/
+[Oo]bj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.pcap
+*.pdb
+
+# Publish directories
+publish/
+publish_pulse/
+publish_pulse_new/
+publish_temp/
+TestFirebase/bin/
+TestFirebase/obj/
+AlpNetWebSetup/bin/
+AlpNetWebSetup/obj/
+AlpNetPulse/bin/
+AlpNetPulse/obj/
+AlpNetKeygenUI/bin/
+AlpNetKeygenUI/obj/
+
+# Visual Studio / Rider
+.vs/
+.idea/
+*.tmp
+*.log

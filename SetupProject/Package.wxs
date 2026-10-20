@@ -1,0 +1,32 @@
+
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <Package Name="AlpNet Pulse Web Setup" Manufacturer="AlpNet" Version="2.2.4.0" UpgradeCode="B54A7E19-76DF-4E90-951E-C639D9B75918">
+    <MajorUpgrade AllowDowngrades="yes" />
+    <MediaTemplate EmbedCab="yes" />
+    <Property Id="REINSTALLMODE" Value="amus" />
+
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="AlpNet Pulse" />
+    </StandardDirectory>
+
+    <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
+      <Component Id="SetupExecutable" Guid="A70B61BE-16A5-4E7B-94C3-A8E890B75807">
+        <File Id="AlpNetSetupEXE" Source="AlpNet.Setup.exe" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <Icon Id="appicon.ico" SourceFile="AlpNetPulse\alpnet_icon.ico"/>
+    <Property Id="ARPPRODUCTICON" Value="appicon.ico" />
+
+    <Feature Id="MainFeature" Title="AlpNet Pulse Web Setup" Level="1">
+      <ComponentGroupRef Id="ProductComponents" />
+    </Feature>
+
+    <!-- Kurulum bittiğinde AlpNet.Setup.exe /auto çalıştırarak webden en güncel sürümü otomatik kurar ve başlatır -->
+    <CustomAction Id="LaunchWebSetup" Directory="INSTALLFOLDER" ExeCommand="&quot;[INSTALLFOLDER]AlpNet.Setup.exe&quot; /auto" Execute="immediate" Impersonate="yes" Return="asyncNoWait" />
+
+    <InstallExecuteSequence>
+      <Custom Action="LaunchWebSetup" After="InstallFinalize" Condition="NOT Installed" />
+    </InstallExecuteSequence>
+  </Package>
+</Wix>

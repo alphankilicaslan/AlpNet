@@ -1,0 +1,1324 @@
+<Window x:Class="AlpNetPulse.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        Title="AlpNet Pulse" Height="800" Width="1200"
+        WindowStartupLocation="CenterScreen"
+        Icon="alpnet_icon.ico"
+        Background="#0B0C10"
+        Foreground="#F8F9FA"
+        FontFamily="Segoe UI, Inter"
+        WindowStyle="None"
+        ResizeMode="CanResize">
+
+    <WindowChrome.WindowChrome>
+        <WindowChrome CaptionHeight="40" 
+                      ResizeBorderThickness="6" 
+                      GlassFrameThickness="1" 
+                      CornerRadius="16"/>
+    </WindowChrome.WindowChrome>
+
+    <Window.Resources>
+
+        <!-- Dark theme ScrollBar thumb style -->
+        <Style x:Key="DarkScrollBarThumb" TargetType="Thumb">
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
+            <Setter Property="OverridesDefaultStyle" Value="True"/>
+            <Setter Property="MinHeight" Value="30"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Thumb">
+                        <Border CornerRadius="5" Background="#4A5080" Margin="3,3,3,3"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="Thumb">
+                                <Border CornerRadius="5" Background="#4A90D9" Margin="3,3,3,3"/>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                </Trigger>
+                <Trigger Property="IsDragging" Value="True">
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="Thumb">
+                                <Border CornerRadius="5" Background="#00F2FE" Margin="3,3,3,3"/>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- Dark theme ScrollBar style -->
+        <Style x:Key="DarkScrollBar" TargetType="ScrollBar">
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
+            <Setter Property="OverridesDefaultStyle" Value="True"/>
+            <Setter Property="Width" Value="24"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollBar">
+                        <Grid Margin="4,6,4,6">
+                            <Border Background="#1A1D28" CornerRadius="6"/>
+                            <Track x:Name="PART_Track" IsDirectionReversed="True">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton Command="ScrollBar.LineUpCommand" Opacity="0"/>
+                                </Track.DecreaseRepeatButton>
+                                <Track.Thumb>
+                                    <Thumb Style="{StaticResource DarkScrollBarThumb}"/>
+                                </Track.Thumb>
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton Command="ScrollBar.LineDownCommand" Opacity="0"/>
+                                </Track.IncreaseRepeatButton>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Dark ScrollViewer -->
+        <Style x:Key="FavScrollViewer" TargetType="ScrollViewer">
+            <Setter Property="OverridesDefaultStyle" Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollViewer">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <ScrollContentPresenter Grid.Column="0"/>
+                            <ScrollBar x:Name="PART_VerticalScrollBar"
+                                       Grid.Column="1"
+                                       Style="{StaticResource DarkScrollBar}"
+                                       Value="{TemplateBinding VerticalOffset}"
+                                       Maximum="{TemplateBinding ScrollableHeight}"
+                                       ViewportSize="{TemplateBinding ViewportHeight}"
+                                       Visibility="{TemplateBinding ComputedVerticalScrollBarVisibility}"/>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Global ScrollBar override for all ScrollBars in the app -->
+        <Style TargetType="ScrollBar" BasedOn="{StaticResource DarkScrollBar}"/>
+
+        <Style x:Key="FlatButtonStyle" TargetType="Button">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="10">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="Segoe UI"/>
+        </Style>
+        <Style TargetType="ComboBoxItem">
+            <Setter Property="Background" Value="#15171E"/>
+            <Setter Property="Foreground" Value="#F8F9FA"/>
+            <Setter Property="BorderThickness" Value="0"/>
+        </Style>
+        <Style x:Key="DarkComboBox" TargetType="ComboBox">
+            <Setter Property="Background" Value="#15171E"/>
+            <Setter Property="Foreground" Value="#F8F9FA"/>
+            <Setter Property="BorderBrush" Value="#252833"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBox">
+                        <Grid>
+                            <ToggleButton x:Name="ToggleButton" Grid.Column="2" Focusable="false" IsChecked="{Binding Path=IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}" ClickMode="Press">
+                                <ToggleButton.Template>
+                                    <ControlTemplate TargetType="ToggleButton">
+                                        <Border Background="#15171E" BorderBrush="#252833" BorderThickness="1" CornerRadius="4">
+                                            <TextBlock Text="▼" Foreground="#ADB5BD" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                        </Border>
+                                    </ControlTemplate>
+                                </ToggleButton.Template>
+                            </ToggleButton>
+                            <ContentPresenter x:Name="ContentSite" IsHitTestVisible="False" Content="{TemplateBinding SelectionBoxItem}" ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}" ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}" Margin="10,5" VerticalAlignment="Center" HorizontalAlignment="Left" />
+                            <Popup x:Name="Popup" Placement="Bottom" IsOpen="{TemplateBinding IsDropDownOpen}" AllowsTransparency="True" Focusable="False" PopupAnimation="Slide">
+                                <Grid x:Name="DropDown" SnapsToDevicePixels="True" MinWidth="{TemplateBinding ActualWidth}" MaxHeight="{TemplateBinding MaxDropDownHeight}">
+                                    <Border x:Name="DropDownBorder" Background="#15171E" BorderThickness="1" BorderBrush="#252833"/>
+                                    <ScrollViewer Margin="1" SnapsToDevicePixels="True">
+                                        <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Contained" />
+                                    </ScrollViewer>
+                                </Grid>
+                            </Popup>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Border BorderBrush="#1F222B" BorderThickness="1.5" CornerRadius="16" Background="#0B0C10" ClipToBounds="True">
+        <Grid>
+            <!-- Title Bar -->
+            <Grid VerticalAlignment="Top" Height="40" Background="#11131A">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <!-- Title & logo -->
+                <StackPanel Orientation="Horizontal" Margin="15,0,0,0" Background="Transparent">
+                    <TextBlock Text="⚡" VerticalAlignment="Center" Foreground="#00F2FE" FontWeight="Bold" FontSize="16" Margin="0,0,8,0"/>
+                    <TextBlock Text="AlpNet Pulse" VerticalAlignment="Center" FontWeight="Bold" Foreground="#F8F9FA" FontSize="14"/>
+                    <Border CornerRadius="4" Background="#1D2A35" Margin="10,0,0,0" Height="20" VerticalAlignment="Center">
+                        <TextBlock Text="Pro" FontSize="10" FontWeight="Bold" Foreground="#00F2FE" Margin="6,2,6,2"/>
+                    </Border>
+                </StackPanel>
+                
+                <!-- Titlebar window action buttons -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="0,0,10,0" VerticalAlignment="Center" WindowChrome.IsHitTestVisibleInChrome="True">
+                    <Button Content="&#xE921;" FontFamily="Segoe MDL2 Assets" Width="30" Height="24" Background="Transparent" Foreground="#F8F9FA" BorderBrush="Transparent" Click="MinimizeButton_Click" FontSize="10" FontWeight="Bold" Cursor="Hand"/>
+                    <Button x:Name="BtnMaximize" Content="&#xE922;" FontFamily="Segoe MDL2 Assets" Width="30" Height="24" Background="Transparent" Foreground="#F8F9FA" BorderBrush="Transparent" Click="MaximizeButton_Click" FontSize="10" FontWeight="Bold" Cursor="Hand"/>
+                    <Button Content="&#xE8BB;" FontFamily="Segoe MDL2 Assets" Width="30" Height="24" Background="Transparent" Foreground="#F8F9FA" BorderBrush="Transparent" Click="CloseButton_Click" FontSize="10" FontWeight="Bold" Cursor="Hand"/>
+                </StackPanel>
+            </Grid>
+
+            <!-- Main Container -->
+            <Grid Margin="0,40,0,0">
+                <!-- LOADING OVERLAY (PREVENTS FLASHING OF ACTIVATION PAGE) -->
+                <Grid x:Name="LoadingOverlay" Panel.ZIndex="150" Background="#F50B0C10" Visibility="Visible">
+                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" TextBlock.TextAlignment="Center">
+                        <TextBlock Text="⚡" FontSize="48" Margin="0,0,0,15" Foreground="#00F2FE">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Style.Triggers>
+                                        <EventTrigger RoutedEvent="Loaded">
+                                            <BeginStoryboard>
+                                                <Storyboard RepeatBehavior="Forever" AutoReverse="True">
+                                                    <DoubleAnimation Storyboard.TargetProperty="Opacity" From="0.3" To="1" Duration="0:0:0.8"/>
+                                                </Storyboard>
+                                            </BeginStoryboard>
+                                        </EventTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                        <TextBlock Text="AlpNet Pulse Başlatılıyor..." FontSize="16" FontWeight="ExtraBold" Foreground="#F8F9FA"/>
+                        <TextBlock Text="Lütfen bekleyin..." FontSize="11" Foreground="#ADB5BD" Margin="0,5,0,0"/>
+                    </StackPanel>
+                </Grid>
+
+                <!-- MAINTENANCE OVERLAY -->
+                <Grid x:Name="MaintenanceOverlay" Panel.ZIndex="200" Background="#F00B0C10" Visibility="Collapsed">
+                    <Border BorderBrush="#252833" BorderThickness="1" Background="#1E2028" CornerRadius="20" Width="400" Height="300" VerticalAlignment="Center" HorizontalAlignment="Center" WindowChrome.IsHitTestVisibleInChrome="True">
+                        <Border.Effect>
+                            <DropShadowEffect Color="#FF3B30" BlurRadius="40" Opacity="0.2" ShadowDepth="0"/>
+                        </Border.Effect>
+                        <StackPanel Margin="30" VerticalAlignment="Center">
+                            <TextBlock Text="🔧" FontSize="48" HorizontalAlignment="Center" Margin="0,0,0,15"/>
+                            <TextBlock Text="SİSTEM BAKIMDA" FontSize="20" FontWeight="ExtraBold" HorizontalAlignment="Center" Foreground="#FF3B30" Margin="0,0,0,10"/>
+                            <TextBlock x:Name="TxtMaintenanceMsg" Text="Sunucularımızda bakım çalışması yapılıyor. Lütfen daha sonra tekrar deneyin." FontSize="14" Foreground="#F8F9FA" HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+
+                <!-- IN-APP MESSAGE BANNER -->
+                <Grid x:Name="InAppMessageOverlay" Panel.ZIndex="300" Visibility="Collapsed" VerticalAlignment="Top" Margin="20,10,20,0">
+                    <Border Background="#15171E" BorderBrush="#00F2FE" BorderThickness="1,1,1,2" CornerRadius="8" Padding="15,10">
+                        <Border.Effect>
+                            <DropShadowEffect Color="#00F2FE" BlurRadius="20" Opacity="0.3" ShadowDepth="0"/>
+                        </Border.Effect>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="📢" FontSize="20" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                            <TextBlock x:Name="TxtInAppMessage" Grid.Column="1" Text="Mesaj buraya gelecek" FontSize="13" Foreground="#F8F9FA" VerticalAlignment="Center" TextWrapping="Wrap"/>
+                            <Button Grid.Column="2" Content="&#xE8BB;" FontFamily="Segoe MDL2 Assets" Width="25" Height="25" Background="Transparent" Foreground="#ADB5BD" BorderBrush="Transparent" FontSize="10" FontWeight="Bold" Cursor="Hand" Click="CloseMessageBanner_Click" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                        </Grid>
+                    </Border>
+                </Grid>
+
+
+                <!-- LICENSE OVERLAY -->
+                <Grid x:Name="LicenseOverlay" Panel.ZIndex="100" Background="#F00B0C10" Visibility="Collapsed">
+                    <Border BorderBrush="#1C2F3D" BorderThickness="1" Background="#1E2028" CornerRadius="20" Width="420" Height="530" VerticalAlignment="Center" HorizontalAlignment="Center" WindowChrome.IsHitTestVisibleInChrome="True">
+                        <Border.Effect>
+                            <DropShadowEffect Color="#00F2FE" BlurRadius="30" Opacity="0.15" ShadowDepth="0"/>
+                        </Border.Effect>
+                        <StackPanel Margin="30,25,30,25">
+                            <TextBlock Text="🔌" FontSize="36" HorizontalAlignment="Center" Margin="0,0,0,10"/>
+                            <TextBlock Text="AlpNet Pulse Aktivasyon" FontSize="20" FontWeight="ExtraBold" HorizontalAlignment="Center" Foreground="#F8F9FA"/>
+                            <TextBlock Text="Uygulamayı kullanabilmek için geçerli bir lisans girin." FontSize="11" Foreground="#ADB5BD" HorizontalAlignment="Center" Margin="0,5,0,20" TextAlignment="Center"/>
+
+
+                            <!-- Device ID field -->
+                            <TextBlock Text="CİHAZ KİMLİĞİ (HARDWARE ID)" FontSize="10" FontWeight="Bold" Foreground="#ADB5BD" Margin="0,0,0,5"/>
+                            <Grid Margin="0,0,0,15">
+                                <TextBox x:Name="TxtDeviceId" Text="Yükleniyor..." IsReadOnly="True" Background="#15171E" Foreground="#00F2FE" BorderBrush="#252833" Padding="8" FontSize="11" FontFamily="Consolas" TextAlignment="Center" Cursor="Hand" PreviewMouseDown="CopyDeviceId_Click"/>
+                            </Grid>
+
+
+                            <!-- Key Input -->
+                            <TextBlock Text="LİSANS ANAHTARI" FontSize="10" FontWeight="Bold" Foreground="#ADB5BD" Margin="0,0,0,5"/>
+                            <TextBox x:Name="TxtLicenseKey" Text="" Tag="ALPNET-XXXX-XXXX-XXXX" Background="#15171E" Foreground="#F8F9FA" BorderBrush="#252833" Padding="8" Margin="0,0,0,15" FontSize="12" FontFamily="Consolas" FontWeight="Bold" TextAlignment="Center"/>
+
+                            <!-- Error Box -->
+                            <Border x:Name="LicenseErrorBorder" Background="#26FF0844" BorderBrush="#80FF0844" BorderThickness="1" CornerRadius="8" Padding="10" Margin="0,0,0,15" Visibility="Collapsed">
+                                <TextBlock x:Name="LblLicenseError" Text="Hata oluştu." TextWrapping="Wrap" Foreground="#FF0844" FontSize="11" HorizontalAlignment="Center"/>
+                            </Border>
+
+                            <!-- Activate Button -->
+                            <Button x:Name="BtnActivate" Content="LİSANSI AKTİFLEŞTİR ➔" Height="40" Background="#00F2FE" Foreground="#0B0C10" FontWeight="Bold" Click="ActivateLicense_Click" Cursor="Hand" Style="{StaticResource FlatButtonStyle}"/>
+
+                            <!-- AlpTogether Ecosystem Cloud Verify -->
+                            <Button x:Name="BtnCheckAlpTogether" Content="✦ AlpTogether Yetkisini Doğrula 🔄" Height="36" Background="#26FF2E93" Foreground="#FF5CAA" BorderBrush="#80FF2E93" BorderThickness="1" FontWeight="Bold" Click="CheckAlpTogether_Click" Cursor="Hand" Style="{StaticResource FlatButtonStyle}" Margin="0,8,0,0"/>
+
+                            <!-- New Subscription / Trial Buttons -->
+                            <StackPanel Margin="0,20,0,0">
+                                <TextBlock Text="VEYA SATIN ALIN / DENEYİN" FontSize="10" FontWeight="Bold" Foreground="#ADB5BD" HorizontalAlignment="Center" Margin="0,0,0,10"/>
+                                
+                                <Button x:Name="BtnTrial" Content="⚡ 1 Saat Ücretsiz Dene" Height="36" Background="#3300F2FE" Foreground="#00F2FE" FontWeight="Bold" Click="StartTrial_Click" Cursor="Hand" Style="{StaticResource FlatButtonStyle}" Margin="0,0,0,8"/>
+                                
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="10"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Button Grid.Column="0" x:Name="BtnBuyWeekly" Content="🧰’ Haftalık Satın Al" Height="36" Background="#1D2A35" Foreground="#F8F9FA" FontWeight="Bold" Click="BuyWeekly_Click" Cursor="Hand" Style="{StaticResource FlatButtonStyle}"/>
+                                    <Button Grid.Column="2" x:Name="BtnBuyMonthly" Content="🧰’ Aylık Satın Al" Height="36" Background="#1D2A35" Foreground="#F8F9FA" FontWeight="Bold" Click="BuyMonthly_Click" Cursor="Hand" Style="{StaticResource FlatButtonStyle}"/>
+                                </Grid>
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+
+                <!-- MAIN INTERFACE -->
+                <Grid x:Name="MainDashboard" Visibility="Collapsed">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="260"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <!-- Left Sidebar (Menu) -->
+                    <Border Grid.Column="0" Background="#11131A" BorderBrush="#1F222B" BorderThickness="0,0,1.5,0" WindowChrome.IsHitTestVisibleInChrome="True">
+                        <StackPanel Margin="20">
+                            <!-- Nav Menu -->
+                            <TextBlock Text="MENÜ" FontSize="10" FontWeight="Bold" Foreground="#667EEA" Margin="0,0,0,10"/>
+                            
+                            <Button x:Name="MenuBtnDashboard" Content="📊 Gösterge Paneli" HorizontalContentAlignment="Left" Padding="15,0,0,0" Height="45" Background="#1D2A35" Foreground="#00F2FE" FontWeight="Bold" BorderBrush="Transparent" Click="Menu_Click" Cursor="Hand" Margin="0,0,0,8" Style="{StaticResource FlatButtonStyle}"/>
+                            <Button x:Name="MenuBtnTools" Content="🧰 Ağ Araçları" HorizontalContentAlignment="Left" Padding="15,0,0,0" Height="45" Background="Transparent" Foreground="#ADB5BD" FontWeight="Bold" BorderBrush="Transparent" Click="Menu_Click" Cursor="Hand" Margin="0,0,0,8" Style="{StaticResource FlatButtonStyle}"/>
+                            <Button x:Name="MenuBtnWifi" Content="📡 Wi-Fi Analizörü" HorizontalContentAlignment="Left" Padding="15,0,0,0" Height="45" Background="Transparent" Foreground="#ADB5BD" FontWeight="Bold" BorderBrush="Transparent" Click="Menu_Click" Cursor="Hand" Margin="0,0,0,8" Style="{StaticResource FlatButtonStyle}"/>
+                            <Button x:Name="MenuBtnGameMode" Content="🎮 Oyun Modu" HorizontalContentAlignment="Left" Padding="15,0,0,0" Height="45" Background="Transparent" Foreground="#ADB5BD" FontWeight="Bold" BorderBrush="Transparent" Click="Menu_Click" Cursor="Hand" Margin="0,0,0,8" Style="{StaticResource FlatButtonStyle}"/>
+                            <Button x:Name="MenuBtnReplay" Content="🎬 Oyun Kaydı" HorizontalContentAlignment="Left" Padding="15,0,0,0" Height="45" Background="Transparent" Foreground="#ADB5BD" FontWeight="Bold" BorderBrush="Transparent" Click="Menu_Click" Cursor="Hand" Margin="0,0,0,8" Style="{StaticResource FlatButtonStyle}"/>
+                            <Button x:Name="MenuBtnVoiceTranslation" Content="🎤 Sesli Çeviri" HorizontalContentAlignment="Left" Padding="15,0,0,0" Height="45" Background="Transparent" Foreground="#ADB5BD" FontWeight="Bold" BorderBrush="Transparent" Click="Menu_Click" Cursor="Hand" Margin="0,0,0,8" Style="{StaticResource FlatButtonStyle}"/>
+                            <Button x:Name="MenuBtnLicense" Content="🔑 Lisans &amp; Hesap" HorizontalContentAlignment="Left" Padding="15,0,0,0" Height="45" Background="Transparent" Foreground="#ADB5BD" FontWeight="Bold" BorderBrush="Transparent" Click="Menu_Click" Cursor="Hand" Margin="0,0,0,8" Style="{StaticResource FlatButtonStyle}"/>
+                            
+                            <Separator Background="#252833" Margin="0,15,0,20"/>
+                            
+                            <!-- Small SİSTEM Info -->
+                            <TextBlock Text="SİSTEM DURUMU" FontSize="10" FontWeight="Bold" Foreground="#667EEA" Margin="0,0,0,10"/>
+                            <TextBlock Text="Dış IP Adresi (WAN)" FontSize="10" Foreground="#ADB5BD" Margin="0,0,0,2"/>
+                            <TextBlock x:Name="LblPublicIp" Text="Yükleniyor..." FontSize="12" FontWeight="Bold" Foreground="#F8F9FA" Margin="0,0,0,10"/>
+                            <TextBlock Text="Bağlantı Türü" FontSize="10" Foreground="#ADB5BD" Margin="0,0,0,2"/>
+                            <TextBlock x:Name="LblConnectionType" Text="Ethernet" FontSize="12" FontWeight="Bold" Foreground="#00FF87" Margin="0,0,0,10"/>
+                            <TextBlock Text="Uygulama sürümü" FontSize="10" Foreground="#ADB5BD" Margin="0,0,0,2"/>
+                            <TextBlock x:Name="LblAppVersion" Text="v2.2.4" FontSize="12" FontWeight="Bold" Foreground="#F8F9FA" Margin="0,0,0,10"/>
+                            <Button x:Name="BtnRestartForUpdate" Content="Yeniden Başlat ve Güncelle" Background="#0088D6" Foreground="White" FontWeight="Bold" FontSize="11" Padding="10,5" BorderThickness="0" Cursor="Hand" Visibility="Collapsed" Click="BtnRestartForUpdate_Click">
+                                <Button.Resources>
+                                    <Style TargetType="Border">
+                                        <Setter Property="CornerRadius" Value="4"/>
+                                    </Style>
+                                </Button.Resources>
+                            </Button>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Right Main panel -->
+                    <Grid Grid.Column="1" Margin="20" WindowChrome.IsHitTestVisibleInChrome="True">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+
+                        <!-- Header -->
+                        <Grid Grid.Row="0" Margin="0,0,0,20">
+                            <StackPanel>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock x:Name="PageTitle" Text="Gösterge Paneli" FontSize="24" FontWeight="ExtraBold" Foreground="#F8F9FA"/>
+                                    <Ellipse Fill="#00FF87" Width="10" Height="10" Margin="10,0,0,0" VerticalAlignment="Center">
+                                        <Ellipse.Style>
+                                            <Style TargetType="Ellipse">
+                                                <Style.Triggers>
+                                                    <EventTrigger RoutedEvent="Loaded">
+                                                        <BeginStoryboard>
+                                                            <Storyboard RepeatBehavior="Forever" AutoReverse="True">
+                                                                <DoubleAnimation Storyboard.TargetProperty="Opacity" From="0.3" To="1" Duration="0:0:1"/>
+                                                            </Storyboard>
+                                                        </BeginStoryboard>
+                                                    </EventTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Ellipse.Style>
+                                    </Ellipse>
+                                </StackPanel>
+                                <TextBlock x:Name="PageSubtitle" Text="Gelişmiş Ethernet Aktarım Gücü &amp; Sağlık Analizörü" FontSize="12" Foreground="#ADB5BD" Margin="0,3,0,0"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- Content Scroll Area -->
+                        <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" Style="{StaticResource FavScrollViewer}">
+                            <StackPanel>
+                                <!-- PAGE 1: DASHBOARD -->
+                                <StackPanel x:Name="PageDashboard" Visibility="Visible">
+                                    
+                                    <!-- WiFi Warning Banner (Conditional) -->
+                                    <Border x:Name="WifiWarningBanner" Background="#26FF9900" BorderBrush="#80FF9900" BorderThickness="1" CornerRadius="12" Padding="15,10" Margin="0,0,0,20" Visibility="Collapsed">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="⚠️" FontSize="18" Foreground="#FF9900" FontWeight="Bold" Margin="0,0,10,0" VerticalAlignment="Center"/>
+                                            <TextBlock Text="Aktif Bağlantınız Wi-Fi olarak algılandı. Donanım sağlığı için Lütfen Ethernet kablosunu bağlayın." Foreground="#FF9900" FontSize="12" VerticalAlignment="Center" TextWrapping="Wrap"/>
+                                        </StackPanel>
+                                    </Border>
+                                    
+                                    <!-- First Row: 4 Metric Cards -->
+                                    <Grid Margin="0,0,0,20">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+
+                                        <!-- Card 1: Speed -->
+                                        <Border Grid.Column="0" Background="#1E2028" BorderBrush="#1C2F3D" BorderThickness="1" CornerRadius="14" Padding="15" Margin="0,0,8,0">
+                                            <StackPanel>
+                                                <TextBlock Text="🚀" FontSize="24" Margin="0,0,0,5"/>
+                                                <TextBlock Text="Aktarım Gücü" FontSize="11" Foreground="#ADB5BD" FontWeight="Bold"/>
+                                                <TextBlock x:Name="CardSpeedVal" Text="---" FontSize="18" FontWeight="Bold" Foreground="#00F2FE" Margin="0,5"/>
+                                                <TextBlock Text="Bağdaştırıcı anlık Hızı (Link Speed)" FontSize="9" Foreground="#ADB5BD" TextWrapping="Wrap"/>
+                                            </StackPanel>
+                                        </Border>
+
+                                        <!-- Card 2: Standard -->
+                                        <Border Grid.Column="1" Background="#1E2028" BorderBrush="#1C2F3D" BorderThickness="1" CornerRadius="14" Padding="15" Margin="4,0,4,0">
+                                            <StackPanel>
+                                                <TextBlock Text="📡" FontSize="24" Margin="0,0,0,5"/>
+                                                <TextBlock Text="Kablo Standardı" FontSize="11" Foreground="#ADB5BD" FontWeight="Bold"/>
+                                                <TextBlock x:Name="CardStandardVal" Text="---" FontSize="18" FontWeight="Bold" Foreground="#667EEA" Margin="0,5" TextWrapping="NoWrap"/>
+                                                <TextBlock Text="Hızı göre tahmini donanım standardı" FontSize="9" Foreground="#ADB5BD" TextWrapping="Wrap"/>
+                                            </StackPanel>
+                                        </Border>
+
+                                        <!-- Card 3: Gateway -->
+                                        <Border Grid.Column="2" Background="#1E2028" BorderBrush="#1C2F3D" BorderThickness="1" CornerRadius="14" Padding="15" Margin="4,0,4,0">
+                                            <StackPanel>
+                                                <TextBlock Text="🔗" FontSize="24" Margin="0,0,0,5"/>
+                                                <TextBlock Text="Karşı Bağlantı" FontSize="11" Foreground="#ADB5BD" FontWeight="Bold"/>
+                                                <TextBlock x:Name="CardGatewayVal" Text="---" FontSize="14" FontWeight="Bold" Foreground="#00FF87" Margin="0,5" TextWrapping="Wrap"/>
+                                                <TextBlock Text="Ağ Geçidi IP ve MAC adresi" FontSize="9" Foreground="#ADB5BD" TextWrapping="Wrap"/>
+                                            </StackPanel>
+                                        </Border>
+
+                                        <!-- Card 4: Health -->
+                                        <Border Grid.Column="3" Background="#1E2028" BorderBrush="#1C2F3D" BorderThickness="1" CornerRadius="14" Padding="15" Margin="8,0,0,0">
+                                            <StackPanel>
+                                                            <TextBlock Text="❤️" FontSize="24" Margin="0,0,0,5"/>
+                                                <TextBlock Text="Kablo Sağlığı" FontSize="11" Foreground="#ADB5BD" FontWeight="Bold"/>
+                                                <TextBlock x:Name="CardHealthVal" Text="Sağlıklı" FontSize="18" FontWeight="Bold" Foreground="#FF9A9E" Margin="0,5"/>
+                                                <TextBlock Text="Hatalı veya düşen paket analizi" FontSize="9" Foreground="#ADB5BD" TextWrapping="Wrap"/>
+                                            </StackPanel>
+                                        </Border>
+                                    </Grid>
+
+                                    <!-- Second Row: Diagnostic Results + Speed Test -->
+                                    <Grid Margin="0,0,0,20">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+
+                                        <!-- Latency Ping Diagnostics -->
+                                        <Border Grid.Column="0" Background="#1E2028" BorderBrush="#1C2F3D" BorderThickness="1" CornerRadius="16" Padding="20" Margin="0,0,8,0">
+                                            <Grid>
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="Auto"/>
+                                                    <RowDefinition Height="*"/>
+                                                    <RowDefinition Height="Auto"/>
+                                                </Grid.RowDefinitions>
+
+                                                <StackPanel Grid.Row="0">
+                                                    <TextBlock Text="İnternet Gecikme Analizi (Ping)" FontSize="15" FontWeight="Bold" Foreground="#F8F9FA"/>
+                                                    <TextBlock Text="Güvenli DNS sunucularına anlık ping testi" FontSize="11" Foreground="#ADB5BD" Margin="0,2,0,15"/>
+                                                </StackPanel>
+
+                                                <StackPanel Grid.Row="1" VerticalAlignment="Center">
+                                                    <Grid Margin="0,5">
+                                                        <TextBlock Text="Hedef Sunucu" Foreground="#ADB5BD" FontSize="12"/>
+                                                        <TextBlock x:Name="PingTargetVal" Text="1.1.1.1 (Cloudflare DNS)" HorizontalAlignment="Right" FontWeight="Bold" FontSize="12"/>
+                                                    </Grid>
+                                                    <Separator Background="#252833" Margin="0,5"/>
+                                                    <Grid Margin="0,5">
+                                                        <TextBlock Text="Paket Kaybı" Foreground="#ADB5BD" FontSize="12"/>
+                                                        <TextBlock x:Name="PingLossVal" Text="---" HorizontalAlignment="Right" FontWeight="Bold" FontSize="12" Foreground="#00FF87"/>
+                                                    </Grid>
+                                                    <Separator Background="#252833" Margin="0,5"/>
+                                                    <Grid Margin="0,5">
+                                                        <TextBlock Text="Ortalama Gecikme (Ping)" Foreground="#ADB5BD" FontSize="12"/>
+                                                        <TextBlock x:Name="PingLatencyVal" Text="---" HorizontalAlignment="Right" FontWeight="Bold" FontSize="12" Foreground="#00F2FE"/>
+                                                    </Grid>
+                                                    <Separator Background="#252833" Margin="0,5"/>
+                                                    <Grid Margin="0,5">
+                                                        <TextBlock Text="Ağ Kartı Yorgunluk (Hata/Kayıp)" Foreground="#ADB5BD" FontSize="12" ToolTip="Kartın çok ısındığını veya arızalandığını gösterir."/>
+                                                        <TextBlock x:Name="NicFatigueVal" Text="Analiz Ediliyor..." HorizontalAlignment="Right" FontWeight="Bold" FontSize="12" Foreground="#00FF87"/>
+                                                    </Grid>
+                                                </StackPanel>
+
+                                                <Button Grid.Row="2" Content="PING TESTİNİ BAŞLAT" Height="36" Background="#11131A" Foreground="#F8F9FA" BorderBrush="#252833" Click="RunPingTest_Click" Cursor="Hand" Margin="0,15,0,0" Style="{StaticResource FlatButtonStyle}"/>
+                                                <Button Grid.Row="2" Content="MODEM STRES TESTİ (LOKAL BANT)" Height="36" Background="#1A1C23" Foreground="#FF9900" BorderBrush="#252833" Click="RunStressTest_Click" Cursor="Hand" Margin="0,8,0,0" Style="{StaticResource FlatButtonStyle}"/>
+                                            </Grid>
+                                        </Border>
+
+                                        <!-- Speed Test Card -->
+                                        <Border Grid.Column="1" Background="#1E2028" BorderBrush="#1C2F3D" BorderThickness="1" CornerRadius="16" Padding="20" Margin="8,0,0,0">
+                                            <Grid>
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="Auto"/>
+                                                    <RowDefinition Height="*"/>
+                                                    <RowDefinition Height="Auto"/>
+                                                </Grid.RowDefinitions>
+
+                                                <StackPanel Grid.Row="0">
+                                                    <TextBlock Text="İnternet Hız Testi" FontSize="15" FontWeight="Bold" Foreground="#F8F9FA"/>
+                                                    <TextBlock Text="Cloudflare CDN üzerinden indirme/yükleme testi" FontSize="11" Foreground="#ADB5BD" Margin="0,2,0,10"/>
+                                                </StackPanel>
+
+                                                <StackPanel Grid.Row="1">
+                                                    <Grid Margin="0,10">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="*"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <StackPanel HorizontalAlignment="Center">
+                                                            <TextBlock Text="📥 İndirme" FontSize="11" Foreground="#ADB5BD" HorizontalAlignment="Center"/>
+                                                            <TextBlock x:Name="SpeedDownloadVal" Text="0.00 Mbps" FontSize="16" FontWeight="ExtraBold" Foreground="#00F2FE" HorizontalAlignment="Center" Margin="0,3"/>
+                                                        </StackPanel>
+                                                        <StackPanel Grid.Column="1" HorizontalAlignment="Center">
+                                                            <TextBlock Text="📤 Yükleme" FontSize="11" Foreground="#ADB5BD" HorizontalAlignment="Center"/>
+                                                            <TextBlock x:Name="SpeedUploadVal" Text="0.00 Mbps" FontSize="16" FontWeight="ExtraBold" Foreground="#00FF87" HorizontalAlignment="Center" Margin="0,3"/>
+                                                        </StackPanel>
+                                                    </Grid>
+
+                                                    <TextBlock x:Name="SpeedStatusVal" Text="Hazır" FontSize="11" Foreground="#ADB5BD" HorizontalAlignment="Center" Margin="0,5"/>
+
+                                                    <!-- Custom Progress Bar -->
+                                                    <Grid x:Name="SpeedProgressContainer" Height="6" Background="#15171E" Margin="0,5">
+                                                        <Rectangle x:Name="SpeedProgressBar" Fill="#00F2FE" HorizontalAlignment="Left" Width="0"/>
+                                                    </Grid>
+                                                </StackPanel>
+
+                                                <Button Grid.Row="2" Content="HIZ TESTİNİ BAŞLAT" Height="36" Background="#667EEA" Foreground="#F8F9FA" BorderBrush="Transparent" Click="RunSpeedTest_Click" Cursor="Hand" Margin="0,15,0,0" Style="{StaticResource FlatButtonStyle}"/>
+                                            </Grid>
+                                        </Border>
+                                    </Grid>
+
+                                    <!-- Third Row: Active Network Adapters List -->
+                                    <Border Background="#1E2028" BorderBrush="#1C2F3D" BorderThickness="1" CornerRadius="16" Padding="20" Margin="0,0,0,10">
+                                        <StackPanel>
+                                            <TextBlock Text="FİZİKSEL Ağ Bağdaştırıcıları" FontSize="15" FontWeight="Bold" Foreground="#F8F9FA" Margin="0,0,0,5"/>
+                                            <TextBlock Text="Sistemdeki aktif ve kullanılabilir FİZİKSEL ağ arayüzleri" FontSize="11" Foreground="#ADB5BD" Margin="0,0,0,15"/>
+
+                                            <!-- Active Adapters list container -->
+                                            <ItemsControl x:Name="ActiveAdaptersList">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Border Background="#15171E" BorderBrush="#252833" BorderThickness="1" CornerRadius="10" Padding="12" Margin="0,0,0,8">
+                                                            <Grid>
+                                                                <Grid.ColumnDefinitions>
+                                                                    <ColumnDefinition Width="*"/>
+                                                                    <ColumnDefinition Width="Auto"/>
+                                                                </Grid.ColumnDefinitions>
+                                                                <StackPanel>
+                                                                    <TextBlock Text="{Binding Name}" FontSize="12" FontWeight="Bold" Foreground="#F8F9FA"/>
+                                                                    <TextBlock Text="{Binding Description}" FontSize="10" Foreground="#ADB5BD" Margin="0,2,0,0"/>
+                                                                </StackPanel>
+                                                                <Border Grid.Column="1" Background="{Binding StatusBg}" CornerRadius="12" Padding="8,4" VerticalAlignment="Center">
+                                                                    <TextBlock Text="{Binding Status}" Foreground="{Binding StatusFg}" FontSize="10" FontWeight="Bold"/>
+                                                                </Border>
+                                                            </Grid>
+                                                        </Border>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+
+                                            <!-- USB Devices Toggle -->
+                                            <Border Background="#1D2A35" CornerRadius="8" Margin="0,10,0,10">
+                                                <Button x:Name="ToggleUsbDevicesBtn" Content="🖱️ Çevre Birimlerini (USB/Mouse/Klavye) Göster ▼" Foreground="#ADB5BD" Background="Transparent" BorderThickness="0" Padding="10,8" Cursor="Hand" Click="ToggleUsbDevicesBtn_Click"/>
+                                            </Border>
+                                            
+                                            <!-- USB Devices List -->
+                                            <ItemsControl x:Name="UsbDevicesList" Visibility="Collapsed">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Border Background="#15171E" BorderBrush="#252833" BorderThickness="1" CornerRadius="10" Padding="12" Margin="0,0,0,8">
+                                                            <Grid>
+                                                                <Grid.ColumnDefinitions>
+                                                                    <ColumnDefinition Width="*"/>
+                                                                    <ColumnDefinition Width="Auto"/>
+                                                                </Grid.ColumnDefinitions>
+                                                                <StackPanel>
+                                                                    <TextBlock Text="{Binding Name}" FontSize="12" FontWeight="Bold" Foreground="#F8F9FA"/>
+                                                                    <TextBlock Text="{Binding Description}" FontSize="10" Foreground="#ADB5BD" Margin="0,2,0,0"/>
+                                                                </StackPanel>
+                                                                <Border Grid.Column="1" Background="{Binding StatusBg}" CornerRadius="12" Padding="8,4" VerticalAlignment="Center">
+                                                                    <TextBlock Text="{Binding Status}" Foreground="{Binding StatusFg}" FontSize="10" FontWeight="Bold"/>
+                                                                </Border>
+                                                            </Grid>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+
+                                        <!-- Other Physical Adapters List -->
+                                        <ItemsControl x:Name="AdaptersList" Margin="0,5,0,0">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border Background="#15171E" BorderBrush="#252833" BorderThickness="1" CornerRadius="10" Padding="12" Margin="0,0,0,8">
+                                                        <Grid>
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="*"/>
+                                                                <ColumnDefinition Width="Auto"/>
+                                                            </Grid.ColumnDefinitions>
+                                                            <StackPanel>
+                                                                <TextBlock Text="{Binding Name}" FontSize="12" FontWeight="Bold" Foreground="#F8F9FA"/>
+                                                                <TextBlock Text="{Binding Description}" FontSize="10" Foreground="#ADB5BD" Margin="0,2,0,0"/>
+                                                            </StackPanel>
+                                                            <Border Grid.Column="1" Background="{Binding StatusBg}" CornerRadius="12" Padding="8,4" VerticalAlignment="Center">
+                                                                <TextBlock Text="{Binding Status}" Foreground="{Binding StatusFg}" FontSize="10" FontWeight="Bold"/>
+                                                            </Border>
+                                                        </Grid>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+
+                                        <!-- Virtual Adapters Toggle -->
+                                        <Border Background="#1D2A35" CornerRadius="8" Margin="0,10,0,0">
+                                            <Button x:Name="ToggleVirtualAdaptersBtn" Content="Sanal Bilgisayar Bağlantılarını Göster ▼" Foreground="#ADB5BD" Background="Transparent" BorderThickness="0" Padding="10,8" Cursor="Hand" Click="ToggleVirtualAdaptersBtn_Click"/>
+                                        </Border>
+                                        <ItemsControl x:Name="VirtualAdaptersList" Visibility="Collapsed" Margin="0,5,0,0">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border Background="#15171E" BorderBrush="#252833" BorderThickness="1" CornerRadius="10" Padding="12" Margin="0,0,0,8">
+                                                        <Grid>
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="*"/>
+                                                                <ColumnDefinition Width="Auto"/>
+                                                            </Grid.ColumnDefinitions>
+                                                            <StackPanel>
+                                                                <TextBlock Text="{Binding Name}" FontSize="12" FontWeight="Bold" Foreground="#F8F9FA"/>
+                                                                <TextBlock Text="{Binding Description}" FontSize="10" Foreground="#ADB5BD" Margin="0,2,0,0"/>
+                                                            </StackPanel>
+                                                            <Border Grid.Column="1" Background="{Binding StatusBg}" CornerRadius="12" Padding="8,4" VerticalAlignment="Center">
+                                                                <TextBlock Text="{Binding Status}" Foreground="{Binding StatusFg}" FontSize="10" FontWeight="Bold"/>
+                                                            </Border>
+                                                        </Grid>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+
+                            <!-- PAGE 2: NETWORK TOOLS -->
+                            <StackPanel x:Name="PageTools" Visibility="Collapsed">
+                                    <Grid Margin="0,0,0,20">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+
+                                        <!-- Network Repair -->
+                                        <Border Grid.Column="0" Background="#1E2028" BorderBrush="#1C2F3D" BorderThickness="1" CornerRadius="16" Padding="20" Margin="0,0,8,0">
+                                            <StackPanel>
+                                                <TextBlock Text="İnternet Onarım Aracı" FontSize="15" FontWeight="Bold" Foreground="#F8F9FA" Margin="0,0,0,5"/>
+                                                <TextBlock Text="Kopma, ping, DNS hatası veya yavaşlama gibi yaygın sorunları çözer." FontSize="11" Foreground="#ADB5BD" Margin="0,0,0,15" TextWrapping="Wrap"/>
+                                                <TextBlock x:Name="RepairStatusVal" Text="Tıklandığında ağ Bağlantınız geçici olarak kesilebilir." FontSize="11" Foreground="#ADB5BD" Margin="0,0,0,10" HorizontalAlignment="Center"/>
+                                                <Button x:Name="BtnRepairNetwork" Content="İNTERNET SORUNLARINI ÇÖZ" Height="40" Background="#11131A" Foreground="#F8F9FA" BorderBrush="Transparent" Click="RunNetworkRepair_Click" Cursor="Hand" Style="{StaticResource FlatButtonStyle}"/>
+                                                <Button x:Name="BtnNukeNetwork" Content="NÜKLEER AĞ SIFIRLAMA ☢️" Height="40" Background="#FF0844" Foreground="#F8F9FA" BorderBrush="Transparent" Click="RunNetworkNuke_Click" Cursor="Hand" Margin="0,10,0,0" Style="{StaticResource FlatButtonStyle}" ToolTip="Ağı fabrikasyon ayarlara döndürür. Bilgisayarı yeniden başlatma gerektirebilir."/>
+                                            </StackPanel>
+                                        </Border>
+
+                                        <!-- AlpNet WARP Split Tunnel -->
+                                        <Border Grid.Column="1" Background="#1E2028" BorderBrush="#1C2F3D" BorderThickness="1" CornerRadius="16" Padding="20" Margin="8,0,0,0">
+                                            <StackPanel>
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <StackPanel>
+                                                        <TextBlock Text="AlpNet WARP Split Tunnel" FontSize="15" FontWeight="Bold" Foreground="#F8F9FA" Margin="0,0,0,5"/>
+                                                        <TextBlock Text="Discord ve Roblox tam hızda açılır. Steam, Valorant ve diğer oyunlarda 0 PİNG!" FontSize="11" Foreground="#ADB5BD" Margin="0,0,0,15" TextWrapping="Wrap"/>
+                                                    </StackPanel>
+                                                    <Border Grid.Column="1" x:Name="BypassStatusBadge" Background="#33FF0844" CornerRadius="12" Padding="8,4" VerticalAlignment="Top">
+                                                        <TextBlock x:Name="BypassStatusText" Text="KAPALI" Foreground="#FF0844" FontSize="10" FontWeight="Bold"/>
+                                                    </Border>
+                                                </Grid>
+                                                
+                                                <TextBlock x:Name="BypassStatusVal" Text="Tüm ISS'ler ile %100 uyumludur." FontSize="11" Foreground="#ADB5BD" Margin="0,0,0,10" HorizontalAlignment="Center"/>
+                                                <Button x:Name="BtnToggleBypass" Content="⚡ WARP SPLIT TUNNELİ BAŞLAT" Height="40" Background="#00F2FE" Foreground="#11131A" FontWeight="Bold" BorderBrush="Transparent" Click="ToggleBypass_Click" Cursor="Hand" Style="{StaticResource FlatButtonStyle}"/>
+                                                <Button x:Name="BtnRepairDiscord" Content="🛠️ Discord Mesaj &amp; Bağlantı Onarımı" Height="32" Background="#11131A" Foreground="#00F2FE" BorderBrush="#00F2FE" BorderThickness="1" Margin="0,8,0,0" FontWeight="SemiBold" FontSize="11" Click="BtnRepairDiscord_Click" Cursor="Hand" Style="{StaticResource FlatButtonStyle}" ToolTip="Discord'da mesaj yüklenmeme veya donma sorununu anında onarır."/>
+                                                
+                                                <!-- Tarayıcı Tüneli (Browser VPN) -->
+                                                <Grid Margin="0,15,0,0">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <StackPanel Grid.Column="0" Orientation="Horizontal">
+                                                        <TextBlock Text="Tarayıcı Tüneli (Browser VPN)" FontSize="11" FontWeight="Bold" Foreground="#ADB5BD"/>
+                                                        <Border x:Name="BadgeBrowserVpn" Background="#33FF0844" CornerRadius="8" Padding="6,2" Margin="8,0,0,0" VerticalAlignment="Center">
+                                                            <TextBlock x:Name="TxtBrowserVpnStatus" Text="KAPALI" Foreground="#FF0844" FontSize="9" FontWeight="Bold"/>
+                                                        </Border>
+                                                    </StackPanel>
+                                                    <ToggleButton x:Name="ChkBrowserVpn" Grid.Column="1" VerticalAlignment="Center" Cursor="Hand" Width="36" Height="20" Click="ChkBrowserVpn_Click">
+                                                        <ToggleButton.Template>
+                                                            <ControlTemplate TargetType="ToggleButton">
+                                                                <Border x:Name="SwitchBg3" CornerRadius="10" Background="#2A2E3D">
+                                                                    <Ellipse x:Name="SwitchKnob3" Width="14" Height="14" Fill="#ADB5BD" HorizontalAlignment="Left" Margin="3,0,0,0">
+                                                                        <Ellipse.RenderTransform>
+                                                                            <TranslateTransform X="0"/>
+                                                                        </Ellipse.RenderTransform>
+                                                                    </Ellipse>
+                                                                </Border>
+                                                                <ControlTemplate.Triggers>
+                                                                    <Trigger Property="IsChecked" Value="True">
+                                                                        <Setter TargetName="SwitchBg3" Property="Background" Value="#00FF87"/>
+                                                                        <Setter TargetName="SwitchKnob3" Property="Fill" Value="#11131A"/>
+                                                                        <Setter TargetName="SwitchKnob3" Property="HorizontalAlignment" Value="Left"/>
+                                                                        <Setter TargetName="SwitchKnob3" Property="Margin" Value="19,0,0,0"/>
+                                                                    </Trigger>
+                                                                </ControlTemplate.Triggers>
+                                                            </ControlTemplate>
+                                                        </ToggleButton.Template>
+                                                    </ToggleButton>
+                                                </Grid>
+                                                <TextBlock Text="Chrome, Edge, Brave vb. tüm sitelere tam hızda girer. Oyunlar 0 ping!" FontSize="9" Foreground="#6c757d" Margin="0,3,0,0"/>
+                                            </StackPanel>
+                                        </Border>
+                                    </Grid>
+
+                                    <!-- DNS Changer (Full Width) -->
+                                    <Border Background="#1E2028" BorderBrush="#1C2F3D" BorderThickness="1" CornerRadius="16" Padding="20" Margin="0,0,0,20">
+                                        <StackPanel>
+                                            <TextBlock Text="Hızlı DNS Sunucuları" FontSize="15" FontWeight="Bold" Foreground="#F8F9FA" Margin="0,0,0,5"/>
+                                            <TextBlock Text="Oyunlarda ping düşürmek ve kısıtlamaları aşmak için DNS değiştirin." FontSize="11" Foreground="#ADB5BD" Margin="0,0,0,15" TextWrapping="Wrap"/>
+                                            
+                                            <Grid x:Name="GridOtherDns">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+                                                <Button x:Name="BtnDnsCloudflare" Grid.Column="0" Content="Cloudflare" Height="30" Background="#1D2A35" Foreground="#00F2FE" BorderBrush="Transparent" Click="SetDnsCloudflare_Click" Cursor="Hand" Margin="0,0,4,0" Style="{StaticResource FlatButtonStyle}"/>
+                                                <Button x:Name="BtnDnsGoogle" Grid.Column="1" Content="Google" Height="30" Background="#1D2A35" Foreground="#00F2FE" BorderBrush="Transparent" Click="SetDnsGoogle_Click" Cursor="Hand" Margin="0,0,4,0" Style="{StaticResource FlatButtonStyle}"/>
+                                                <Button x:Name="BtnDnsReset" Grid.Column="2" Content="Sıfırla" Height="30" Background="#33FF0844" Foreground="#FF0844" BorderBrush="Transparent" Click="ResetDns_Click" Cursor="Hand" Margin="0,0,0,0" Style="{StaticResource FlatButtonStyle}"/>
+                                            </Grid>
+                                            
+                                            <!-- Askeri Düzey DNS -->
+                                            <Button x:Name="BtnToggleDoH" Content="🔒 ASKERİ DÜZEY ŞİFRELİ DNS BAŞLAT" Height="35" Background="#11131A" Foreground="#00FF87" FontWeight="Bold" BorderThickness="1" BorderBrush="#00FF87" Margin="0,15,0,5" Cursor="Hand" Click="ToggleDoH_Click" Style="{StaticResource FlatButtonStyle}"/>
+                                            <TextBlock Text="Hangi siteye girmek istediğiniz bilgisini alır, bunu askeri düzeyde kırılmaz bir şifreleme ile paketler. İnternet sağlayıcınıza (Türk Telekom, Turkcell vb.) sadece anlamsız, şifreli bir veri yığını gider ve %100 gizlilik sağlar. (İlk açılışta ~8MB güvenlik altyapısı indirilir)" FontSize="10" Foreground="#FF9900" TextWrapping="Wrap" HorizontalAlignment="Center" TextAlignment="Center"/>
+                                            
+                                            <TextBlock x:Name="DnsStatusVal" Text="Şu anki: Bilinmiyor" FontSize="11" Foreground="#00FF87" Margin="0,15,0,0" HorizontalAlignment="Center"/>
+                                            
+                                            <!-- Şifre Sızıntı Kontrolü -->
+                                            <Grid Margin="0,15,0,0">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <PasswordBox x:Name="PwnedPasswordInput" Background="#15171E" Foreground="#F8F9FA" BorderBrush="#252833" Padding="10,4" FontSize="12" Height="30" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                                <Button Grid.Column="1" x:Name="BtnScanPassword" Content="🛡️ TARAT" Width="80" Height="30" Background="#667EEA" Foreground="#F8F9FA" FontWeight="Bold" FontSize="11" BorderThickness="0" Cursor="Hand" Click="ScanPassword_Click" Style="{StaticResource FlatButtonStyle}"/>
+                                                <TextBlock Grid.Column="2" x:Name="PwnedPasswordResult" Text="" FontSize="11" FontWeight="SemiBold" Foreground="#ADB5BD" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                            </Grid>
+                                        </StackPanel>
+                                    </Border>
+                                </StackPanel>
+
+                                <!-- PAGE WIFI ANALYZER -->
+                                <StackPanel x:Name="PageWifi" Visibility="Collapsed">
+                                    <Border Background="#1E2028" BorderBrush="#1C2F3D" BorderThickness="1" CornerRadius="16" Padding="20">
+                                        <StackPanel>
+                                            <TextBlock x:Name="WifiScanStatus" Text="📡 Çevredeki Wi-Fi ağları otomatik taranıyor..." Foreground="#ADB5BD" FontSize="12" FontStyle="Italic" Margin="0,0,0,15"/>
+                                            
+                                            <Grid MinHeight="420">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+
+                                                <!-- Sol: Canlı Radar -->
+                                                <Grid x:Name="WifiRadarGrid" Grid.Column="0" Margin="0,0,15,0" Visibility="Visible">
+                                                    <Canvas x:Name="WifiRadarCanvas" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" MinHeight="400" Background="Transparent" SizeChanged="WifiRadarCanvas_SizeChanged"/>
+                                                </Grid>
+
+                                                <!-- Sağ: Tespit Edilen Ağlar ve Kanallar -->
+                                                <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" MaxHeight="420" Margin="15,0,0,0">
+                                                    <ItemsControl x:Name="WifiNetworksList" Visibility="Visible">
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate>
+                                                                <Border Background="{Binding ItemBackground}" BorderBrush="{Binding ItemBorder}" BorderThickness="1" CornerRadius="10" Padding="12,10" Margin="0,0,0,8">
+                                                                    <Grid>
+                                                                        <Grid.ColumnDefinitions>
+                                                                            <ColumnDefinition Width="*"/>
+                                                                            <ColumnDefinition Width="Auto"/>
+                                                                        </Grid.ColumnDefinitions>
+                                                                        <StackPanel Grid.Column="0">
+                                                                            <StackPanel Orientation="Horizontal">
+                                                                                <TextBlock Text="{Binding Ssid}" FontWeight="Bold" FontSize="13" Foreground="#F8F9FA" VerticalAlignment="Center"/>
+                                                                                <Border Visibility="{Binding ConnectedVisibility}" Background="#00FF87" CornerRadius="4" Padding="5,1" Margin="8,0,0,0">
+                                                                                    <TextBlock Text="BAĞLI" Foreground="#11131A" FontSize="9" FontWeight="Bold"/>
+                                                                                </Border>
+                                                                            </StackPanel>
+                                                                            <TextBlock Text="{Binding ChannelInfo}" Foreground="{Binding ChannelColor}" FontSize="11" FontWeight="SemiBold" Margin="0,4,0,0"/>
+                                                                        </StackPanel>
+                                                                        <Border Grid.Column="1" Background="#15171E" CornerRadius="8" Padding="10,5" VerticalAlignment="Center">
+                                                                            <TextBlock Text="{Binding Signal}" Foreground="{Binding SignalColor}" FontWeight="Bold" FontSize="12"/>
+                                                                        </Border>
+                                                                    </Grid>
+                                                                </Border>
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+                                                </ScrollViewer>
+                                            </Grid>
+                                        </StackPanel>
+                                    </Border>
+                                </StackPanel>
+
+                                                                <!-- PAGE GAME MODE -->
+                                <StackPanel x:Name="PageGameMode" Visibility="Collapsed">
+
+                                    <!-- Oyun Modu Açıklama & Kontrol -->
+                                    <Border Background="#1E2028" BorderBrush="#1C2F3D" BorderThickness="1" CornerRadius="16" Padding="25" Margin="0,0,0,20">
+                                        <StackPanel>
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel>
+                                                    <TextBlock Text="🎮 Oyun Modu (Optimizer)" FontSize="18" FontWeight="Bold" Foreground="#F8F9FA" Margin="0,0,0,8"/>
+                                                    <TextBlock Text="Oyun Modu, bilgisayarınızdaki gereksiz arka plan hizmetlerini geçici olarak durdurarak internet bant genişliğinizi ve sistem kaynaklarınızı tamamen oyununuza yönlendirir." FontSize="12" Foreground="#ADB5BD" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                                                </StackPanel>
+                                                <Border Grid.Column="1" x:Name="GameModeBadge" Background="#33FF0844" CornerRadius="12" Padding="10,6" VerticalAlignment="Top" Margin="15,0,0,0">
+                                                    <TextBlock x:Name="GameModeBadgeText" Text="KAPALI" Foreground="#FF0844" FontSize="11" FontWeight="Bold"/>
+                                                </Border>
+                                            </Grid>
+
+                                            <Border Background="#15171E" CornerRadius="10" Padding="15" Margin="0,5,0,15">
+                                                <StackPanel>
+                                                    <TextBlock Text="Ne İşe Yarar?" FontSize="13" FontWeight="Bold" Foreground="#00F2FE" Margin="0,0,0,8"/>
+                                                    <TextBlock Text="• Windows Update, OneDrive, Steam ve Epic Games gibi arka plan indirmelerini geçici olarak durdurur" FontSize="11" Foreground="#ADB5BD" TextWrapping="Wrap" Margin="0,0,0,4"/>
+                                                    <TextBlock Text="• Ağ kartınızdaki 'Interrupt Moderation' özelliğini kapatarak gecikme süresini (ping) düşürür" FontSize="11" Foreground="#ADB5BD" TextWrapping="Wrap" Margin="0,0,0,4"/>
+                                                    <TextBlock Text="• Nagle algoritmasını devre dışı bırakarak paket gönderimini hızlandırır" FontSize="11" Foreground="#ADB5BD" TextWrapping="Wrap" Margin="0,0,0,4"/>
+                                                    <TextBlock Text="• Tüm bant genişliğinizi oyuna ayırarak lag, rubber-banding ve paket kaybını en aza indirir" FontSize="11" Foreground="#ADB5BD" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                                                    <TextBlock Text="⚠️ Oyun bittiğinde modu kapatmayı unutmayın, aksi halde güncellemeler ve bulut senkronizasyonu çalışmaz." FontSize="11" Foreground="#FF9900" TextWrapping="Wrap" FontStyle="Italic"/>
+                                                </StackPanel>
+                                            </Border>
+
+                                            <TextBlock x:Name="GameModeStatusVal" Text="Önerilir: Oyuna girmeden önce açın." FontSize="12" Foreground="#ADB5BD" Margin="0,0,0,12" HorizontalAlignment="Center"/>
+                                            <Button x:Name="BtnToggleGameMode" Content="OYUN MODUNU AÇ" Height="45" Background="#667EEA" Foreground="#F8F9FA" FontWeight="Bold" FontSize="14" BorderBrush="Transparent" Click="ToggleGameMode_Click" Cursor="Hand" Style="{StaticResource FlatButtonStyle}"/>
+                                        </StackPanel>
+                                    </Border>
+
+                                    
+                                    <!-- Donanım Monitörü (Sensörler) -->
+                                    <Border Background="#1E2028" BorderBrush="#1C2F3D" BorderThickness="1" CornerRadius="16" Padding="20" Margin="0,0,0,20">
+                                        <StackPanel>
+                                            <TextBlock Text="Oyun İçi Donanım Monitörü" FontSize="15" FontWeight="Bold" Foreground="#F8F9FA"/>
+                                            <TextBlock Text="Sistemdeki anlık CPU ve GPU performans değerleri" FontSize="11" Foreground="#ADB5BD" Margin="0,2,0,15"/>
+                                            
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+                                                
+                                                <!-- CPU Card -->
+                                                <Border Grid.Column="0" Background="#15171E" BorderBrush="#252833" BorderThickness="1" CornerRadius="12" Padding="15" Margin="0,0,8,0">
+                                                    <StackPanel>
+                                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                                            <TextBlock Text="🧠" FontSize="20" Margin="0,0,8,0"/>
+                                                            <StackPanel>
+                                                                <TextBlock Text="İşlemci (CPU)" FontSize="12" FontWeight="Bold" Foreground="#667EEA"/>
+                                                                <TextBlock x:Name="LblCpuName" Text="Yükleniyor..." FontSize="10" Foreground="#ADB5BD"/>
+                                                            </StackPanel>
+                                                        </StackPanel>
+                                                        <Grid>
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="*"/>
+                                                            </Grid.ColumnDefinitions>
+                                                            <StackPanel Grid.Column="0">
+                                                                <TextBlock Text="Kullanım" FontSize="10" Foreground="#ADB5BD"/>
+                                                                <TextBlock x:Name="LblCpuLoad" Text="-- %" FontSize="18" FontWeight="Bold" Foreground="#00FF87"/>
+                                                            </StackPanel>
+                                                        </Grid>
+                                                    </StackPanel>
+                                                </Border>
+                                                
+                                                <!-- GPU Card -->
+                                                <Border Grid.Column="1" Background="#15171E" BorderBrush="#252833" BorderThickness="1" CornerRadius="12" Padding="15" Margin="8,0,0,0">
+                                                    <StackPanel>
+                                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                                            <TextBlock Text="🎮" FontSize="20" Margin="0,0,8,0"/>
+                                                            <StackPanel>
+                                                                <TextBlock Text="Ekran Kartı (GPU)" FontSize="12" FontWeight="Bold" Foreground="#00FF87"/>
+                                                                <TextBlock x:Name="LblGpuName" Text="Yükleniyor..." FontSize="10" Foreground="#ADB5BD"/>
+                                                            </StackPanel>
+                                                        </StackPanel>
+                                                        <Grid>
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="*"/>
+                                                                <ColumnDefinition Width="*"/>
+                                                            </Grid.ColumnDefinitions>
+                                                            <StackPanel Grid.Column="0">
+                                                                <TextBlock Text="Sıcaklık" FontSize="10" Foreground="#ADB5BD"/>
+                                                                <TextBlock x:Name="LblGpuTemp" Text="-- °C" FontSize="18" FontWeight="Bold" Foreground="#FF9900"/>
+                                                            </StackPanel>
+                                                            <StackPanel Grid.Column="1">
+                                                                <TextBlock Text="Kullanım" FontSize="10" Foreground="#ADB5BD"/>
+                                                                <TextBlock x:Name="LblGpuLoad" Text="-- %" FontSize="18" FontWeight="Bold" Foreground="#00F2FE"/>
+                                                            </StackPanel>
+                                                        </Grid>
+                                                    </StackPanel>
+                                                </Border>
+                                            </Grid>
+                                        </StackPanel>
+                                    </Border>
+                                    
+                                    <!-- Optimizasyon Paneli -->
+                                    <Border Background="#1E2028" BorderBrush="#1C2F3D" BorderThickness="1" CornerRadius="16" Padding="20">
+                                        <StackPanel>
+                                            <TextBlock Text="ÇEKİRDEK &amp; Öncelik Optimizasyonu" FontSize="15" FontWeight="Bold" Foreground="#F8F9FA"/>
+                                            <TextBlock Text="Oyunlarda anlık FPS droplarını (darboğaz) önlemek için işlemi optimize edin." FontSize="11" Foreground="#ADB5BD" Margin="0,2,0,10"/>
+                                            
+                                            <Border Background="#15171E" CornerRadius="10" Padding="15" Margin="0,5,0,15">
+                                                <StackPanel>
+                                                    <TextBlock Text="Bu Özellikler Ne İşe Yarar?" FontSize="13" FontWeight="Bold" Foreground="#00F2FE" Margin="0,0,0,8"/>
+                                                    <TextBlock Text="⚡ SİSTEM ÖNCELİĞİ: Oyunun Windows içerisindeki önceliğini 'Normal Üstü' (Above Normal) seviyesine çıkarır. 'Yüksek' seviyenin aksine fare, klavye ve sistem sürücülerini tıkamadan oyuna hafif bir öncelik verir." FontSize="11" Foreground="#ADB5BD" TextWrapping="Wrap" Margin="0,0,0,6"/>
+                                                    <TextBlock Text="🎛️ FİZİKSEL ÇEKİRDEK: Oyunun mantıksal işlemciler (Hyper-Threading / SMT) yerine sadece saf fiziksel çekirdeklerde çalışmasını sağlar. Özellikle eski oyunlarda veya CS2/Valorant gibi e-spor oyunlarında 1% Low FPS değerlerini yükselterek takılmaları azaltır." FontSize="11" Foreground="#ADB5BD" TextWrapping="Wrap" Margin="0,0,0,4"/>
+                                                </StackPanel>
+                                            </Border>
+                                            
+                                            <Grid Margin="0,0,0,15">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                
+                                                <ComboBox x:Name="CmbRunningGames" Height="36" Style="{StaticResource DarkComboBox}" DisplayMemberPath="DisplayName" SelectedValuePath="Id" VerticalContentAlignment="Center"/>
+                                                <Button Grid.Column="1" Content="YENİLE" Width="80" Height="36" Background="#1D2A35" Foreground="#F8F9FA" FontWeight="Bold" BorderThickness="0" Margin="10,0,0,0" Cursor="Hand" Click="RefreshGamesList_Click" Style="{StaticResource FlatButtonStyle}"/>
+                                            </Grid>
+                                            
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="10"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="10"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                
+                                                <Button x:Name="BtnOptimizePriority" Grid.Column="0" Content="⚡ ÖNCELİK" Height="45" Background="#667EEA" Foreground="#F8F9FA" FontWeight="Bold" BorderThickness="0" Cursor="Hand" Click="OptimizePriority_Click" Style="{StaticResource FlatButtonStyle}"/>
+                                                <Button x:Name="BtnOptimizeCores" Grid.Column="2" Content="🎛️ ÇEKİRDEK (AFFINITY)" Height="45" Background="#00F2FE" Foreground="#0B0C10" FontWeight="Bold" BorderThickness="0" Cursor="Hand" Click="OptimizeCores_Click" Style="{StaticResource FlatButtonStyle}"/>
+                                                <Button x:Name="BtnRevertOptimization" Grid.Column="4" Content="↺ SIFIRLA" Height="45" Width="100" Background="#3A3F58" Foreground="#F8F9FA" FontWeight="Bold" BorderThickness="0" Cursor="Hand" Click="RevertOptimization_Click" Style="{StaticResource FlatButtonStyle}" ToolTip="İşlem önceliğini ve çekirdekleri varsayılana döndürür."/>
+                                            </Grid>
+                                            
+                                            <TextBlock x:Name="LblGameOptimizationStatus" Text="" FontSize="11" Foreground="#00FF87" Margin="0,15,0,0" HorizontalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Border>
+
+                                </StackPanel>
+
+                                <!-- PAGE REPLAY -->
+                                <StackPanel x:Name="PageReplay" Visibility="Collapsed">
+                                    <!-- Anlık Tekrar Kaydı (Instant Replay) -->
+                                    <Border Background="#1E2028" BorderBrush="#1C2F3D" BorderThickness="1" CornerRadius="16" Padding="25" Margin="0,0,0,0">
+                                        <StackPanel>
+                                            <!-- Header -->
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel>
+                                                    <TextBlock Text="🎬 Oyun Kaydı (Instant Replay)" FontSize="18" FontWeight="Bold" Foreground="#F8F9FA" Margin="0,0,0,8"/>
+                                                    <TextBlock Text="Arka planda ekranı sürekli kaydeder. Belirlediğiniz tuşa basarak son X dakikayı klip olarak kaydedebilirsiniz." FontSize="12" Foreground="#ADB5BD" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                                                </StackPanel>
+                                                <Border Grid.Column="1" x:Name="ReplayStatusBadge" Background="#33FF0844" CornerRadius="12" Padding="10,6" VerticalAlignment="Top" Margin="15,0,0,0">
+                                                    <TextBlock x:Name="ReplayStatusBadgeText" Text="KAPALI" Foreground="#FF0844" FontSize="11" FontWeight="Bold"/>
+                                                </Border>
+                                            </Grid>
+
+                                            <!-- Status Info -->
+                                            <Border Background="#15171E" CornerRadius="10" Padding="15" Margin="0,5,0,15">
+                                                <StackPanel>
+                                                    <Grid Margin="0,0,0,5">
+                                                        <TextBlock Text="Durum" Foreground="#ADB5BD" FontSize="12"/>
+                                                        <TextBlock x:Name="TxtReplayStatus" Text="Kayıt başlatılmadı." HorizontalAlignment="Right" FontWeight="Bold" FontSize="12" Foreground="#ADB5BD"/>
+                                                    </Grid>
+                                                    <Separator Background="#252833" Margin="0,3"/>
+                                                    <Grid Margin="0,5,0,0">
+                                                        <TextBlock Text="Encoder" Foreground="#ADB5BD" FontSize="12"/>
+                                                        <TextBlock x:Name="TxtReplayEncoder" Text="Tespit edilmedi" HorizontalAlignment="Right" FontWeight="Bold" FontSize="12" Foreground="#667EEA"/>
+                                                    </Grid>
+                                                    <Separator Background="#252833" Margin="0,3"/>
+                                                    <Grid Margin="0,5,0,0">
+                                                        <TextBlock Text="Disk Kullanımı" Foreground="#ADB5BD" FontSize="12"/>
+                                                        <TextBlock x:Name="TxtReplayDisk" Text="0 MB" HorizontalAlignment="Right" FontWeight="Bold" FontSize="12" Foreground="#FF9900"/>
+                                                    </Grid>
+                                                </StackPanel>
+                                            </Border>
+
+                                            <!-- Start/Stop Buttons -->
+                                            <Grid Margin="0,0,0,15">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="10"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+                                                <Button x:Name="BtnStartReplay" Grid.Column="0" Content="🔴 KAYDI BAŞLAT" Height="45" Background="#667EEA" Foreground="#F8F9FA" FontWeight="Bold" FontSize="13" BorderThickness="0" Cursor="Hand" Click="StartReplay_Click" Style="{StaticResource FlatButtonStyle}"/>
+                                                <Button x:Name="BtnStopReplay" Grid.Column="2" Content="⬛ KAYDI DURDUR" Height="45" Background="#3A3F58" Foreground="#F8F9FA" FontWeight="Bold" FontSize="13" BorderThickness="0" Cursor="Hand" Click="StopReplay_Click" Style="{StaticResource FlatButtonStyle}" IsEnabled="False"/>
+                                            </Grid>
+
+                                            <!-- Settings Section -->
+                                            <TextBlock Text="AYARLAR" FontSize="11" FontWeight="Bold" Foreground="#667EEA" Margin="0,5,0,10"/>
+
+                                            <!-- Buffer Duration -->
+                                            <TextBlock Text="Buffer Süresi (kaydedilecek geçmiş):" FontSize="12" Foreground="#ADB5BD" Margin="0,0,0,8"/>
+                                            <Grid Margin="0,0,0,12">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+                                                <Button x:Name="BtnBuffer1" Grid.Column="0" Content="1 dk" Height="36" Background="#1D2A35" Foreground="#ADB5BD" FontWeight="Bold" BorderThickness="0" Margin="0,0,4,0" Cursor="Hand" Click="BufferDuration_Click" Tag="1" Style="{StaticResource FlatButtonStyle}"/>
+                                                <Button x:Name="BtnBuffer3" Grid.Column="1" Content="3 dk" Height="36" Background="#1D2A35" Foreground="#ADB5BD" FontWeight="Bold" BorderThickness="0" Margin="0,0,4,0" Cursor="Hand" Click="BufferDuration_Click" Tag="3" Style="{StaticResource FlatButtonStyle}"/>
+                                                <Button x:Name="BtnBuffer5" Grid.Column="2" Content="5 dk" Height="36" Background="#1D2A35" Foreground="#ADB5BD" FontWeight="Bold" BorderThickness="0" Margin="0,0,4,0" Cursor="Hand" Click="BufferDuration_Click" Tag="5" Style="{StaticResource FlatButtonStyle}"/>
+                                                <Button x:Name="BtnBuffer10" Grid.Column="3" Content="10 dk" Height="36" Background="#00F2FE" Foreground="#0B0C10" FontWeight="Bold" BorderThickness="0" Margin="0,0,4,0" Cursor="Hand" Click="BufferDuration_Click" Tag="10" Style="{StaticResource FlatButtonStyle}"/>
+                                                <Button x:Name="BtnBuffer30" Grid.Column="4" Content="30 dk" Height="36" Background="#1D2A35" Foreground="#ADB5BD" FontWeight="Bold" BorderThickness="0" Margin="0,0,0,0" Cursor="Hand" Click="BufferDuration_Click" Tag="30" Style="{StaticResource FlatButtonStyle}"/>
+                                            </Grid>
+
+                                            <!-- Hotkey & Quality Row -->
+                                            <Grid Margin="0,0,0,12">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="15"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+
+                                                <!-- Hotkey -->
+                                                <StackPanel Grid.Column="0">
+                                                    <TextBlock Text="Kayıt Tuşu (Hotkey):" FontSize="12" Foreground="#ADB5BD" Margin="0,0,0,6"/>
+                                                    <Button x:Name="BtnSetHotkey" Content="F9" Height="40" Background="#15171E" Foreground="#00F2FE" FontWeight="Bold" FontSize="16" BorderBrush="#252833" BorderThickness="1" Cursor="Hand" Click="SetHotkey_Click" Style="{StaticResource FlatButtonStyle}" ToolTip="Tıklayıp yeni bir tuş basın"/>
+                                                </StackPanel>
+
+                                                <!-- FPS -->
+                                                <StackPanel Grid.Column="2">
+                                                    <TextBlock Text="Kayıt FPS:" FontSize="12" Foreground="#ADB5BD" Margin="0,0,0,6"/>
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="*"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <Button x:Name="BtnFps30" Grid.Column="0" Content="30 FPS" Height="40" Background="#00F2FE" Foreground="#0B0C10" FontWeight="Bold" BorderThickness="0" Margin="0,0,4,0" Cursor="Hand" Click="FpsSetting_Click" Tag="30" Style="{StaticResource FlatButtonStyle}"/>
+                                                        <Button x:Name="BtnFps60" Grid.Column="1" Content="60 FPS" Height="40" Background="#1D2A35" Foreground="#ADB5BD" FontWeight="Bold" BorderThickness="0" Cursor="Hand" Click="FpsSetting_Click" Tag="60" Style="{StaticResource FlatButtonStyle}"/>
+                                                    </Grid>
+                                                </StackPanel>
+                                            </Grid>
+
+                                            <!-- Quality -->
+                                            <TextBlock Text="Kayıt Kalitesi:" FontSize="12" Foreground="#ADB5BD" Margin="0,0,0,6"/>
+                                            <Grid Margin="0,0,0,4">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+                                                <Button x:Name="BtnQualityLow" Grid.Column="0" Content="Düşük" Height="36" Background="#1D2A35" Foreground="#ADB5BD" FontWeight="Bold" BorderThickness="0" Margin="0,0,4,0" Cursor="Hand" Click="QualitySetting_Click" Tag="Low" Style="{StaticResource FlatButtonStyle}"/>
+                                                <Button x:Name="BtnQualityMedium" Grid.Column="1" Content="Orta" Height="36" Background="#00F2FE" Foreground="#0B0C10" FontWeight="Bold" BorderThickness="0" Margin="0,0,4,0" Cursor="Hand" Click="QualitySetting_Click" Tag="Medium" Style="{StaticResource FlatButtonStyle}"/>
+                                                <Button x:Name="BtnQualityHigh" Grid.Column="2" Content="Yüksek" Height="36" Background="#1D2A35" Foreground="#ADB5BD" FontWeight="Bold" BorderThickness="0" Cursor="Hand" Click="QualitySetting_Click" Tag="High" Style="{StaticResource FlatButtonStyle}"/>
+                                            </Grid>
+                                            <Grid Margin="0,0,0,12">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0" Text="720p" FontSize="11" Foreground="#8B949E" HorizontalAlignment="Center"/>
+                                                <TextBlock Grid.Column="1" Text="1080p" FontSize="11" Foreground="#8B949E" HorizontalAlignment="Center"/>
+                                                <TextBlock Grid.Column="2" Text="1440p+" FontSize="11" Foreground="#8B949E" HorizontalAlignment="Center"/>
+                                            </Grid>
+
+                                            <!-- Audio Settings -->
+                                            <TextBlock Text="Ses Ayarları:" FontSize="12" Foreground="#ADB5BD" Margin="0,0,0,6"/>
+                                            <Grid Margin="0,0,0,12">
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="Auto"/>
+                                                    <RowDefinition Height="Auto"/>
+                                                </Grid.RowDefinitions>
+                                                
+                                                <StackPanel Orientation="Horizontal" Grid.Row="0" Margin="0,0,0,8">
+                                                    <CheckBox x:Name="ChkRecordAudio" Content="Sistem Sesini Kaydet" Foreground="#F8F9FA" VerticalContentAlignment="Center" Margin="0,0,20,0" Checked="AudioSetting_Changed" Unchecked="AudioSetting_Changed"/>
+                                                    <CheckBox x:Name="ChkRecordMic" Content="Mikrofonu Kaydet" Foreground="#F8F9FA" VerticalContentAlignment="Center" Checked="AudioSetting_Changed" Unchecked="AudioSetting_Changed"/>
+                                                </StackPanel>
+                                                
+                                                <ComboBox x:Name="CmbMicDevices" Grid.Row="1" Height="30" Style="{StaticResource DarkComboBox}" SelectionChanged="MicDevice_SelectionChanged"/>
+                                            </Grid>
+
+                                            <!-- Save Folder -->
+                                            <TextBlock Text="Kayıt Klasörü:" FontSize="12" Foreground="#ADB5BD" Margin="0,0,0,6"/>
+                                            <Grid Margin="0,0,0,12">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock x:Name="TxtReplaySaveFolder" Text="Yükleniyor..." FontSize="11" Foreground="#F8F9FA" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Margin="0,0,10,0"/>
+                                                <Button Grid.Column="1" Content="📁 Seç" Height="32" Width="70" Background="#1D2A35" Foreground="#F8F9FA" FontWeight="Bold" BorderThickness="0" Margin="0,0,5,0" Cursor="Hand" Click="SelectReplayFolder_Click" Style="{StaticResource FlatButtonStyle}"/>
+                                                <Button Grid.Column="2" Content="📂 Aç" Height="32" Width="70" Background="#1D2A35" Foreground="#F8F9FA" FontWeight="Bold" BorderThickness="0" Cursor="Hand" Click="OpenReplayFolder_Click" Style="{StaticResource FlatButtonStyle}"/>
+                                            </Grid>
+
+                                            <!-- Estimated Disk Usage -->
+                                            <Border Background="#15171E" CornerRadius="8" Padding="10" Margin="0,0,0,10">
+                                                <TextBlock x:Name="TxtReplayEstimate" Text="Tahmini disk kullanımı: ~500 MB (10 dk, Orta kalite, 30 FPS)" FontSize="11" Foreground="#FF9900" HorizontalAlignment="Center" TextWrapping="Wrap"/>
+                                            </Border>
+
+                                            <!-- Recent Clips -->
+                                            <TextBlock Text="SON KLİPLER" FontSize="11" FontWeight="Bold" Foreground="#667EEA" Margin="0,10,0,8"/>
+                                            <ItemsControl x:Name="ReplayClipsList">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Border Background="#15171E" BorderBrush="#252833" BorderThickness="1" CornerRadius="8" Padding="10" Margin="0,0,0,5">
+                                                            <Border.ContextMenu>
+                                                                <ContextMenu>
+                                                                    <MenuItem Header="🗑️ Sil" Click="DeleteClip_Click" Tag="{Binding FullPath}"/>
+                                                                </ContextMenu>
+                                                            </Border.ContextMenu>
+                                                            <Grid>
+                                                                <Grid.ColumnDefinitions>
+                                                                    <ColumnDefinition Width="*"/>
+                                                                    <ColumnDefinition Width="Auto"/>
+                                                                    <ColumnDefinition Width="Auto"/>
+                                                                    <ColumnDefinition Width="Auto"/>
+                                                                </Grid.ColumnDefinitions>
+                                                                <StackPanel>
+                                                                    <TextBlock x:Name="TxtFileName" Text="{Binding FileName}" FontSize="12" FontWeight="Bold" Foreground="#F8F9FA" TextTrimming="CharacterEllipsis"/>
+                                                                    <TextBox x:Name="EditFileName" Text="{Binding FileName}" FontSize="12" FontWeight="Bold" Visibility="Collapsed" KeyDown="EditFileName_KeyDown" LostFocus="EditFileName_LostFocus" Tag="{Binding FullPath}"/>
+                                                                    <TextBlock Text="{Binding DisplayDate}" FontSize="10" Foreground="#ADB5BD"/>
+                                                                </StackPanel>
+                                                                <TextBlock Grid.Column="1" Text="{Binding DisplaySize}" FontSize="12" FontWeight="Bold" Foreground="#FF9900" VerticalAlignment="Center" Margin="10,0"/>
+                                                                <Button Grid.Column="2" Content="✏️ İsimlendir" Height="30" Width="90" Background="#2A3B4C" Foreground="#F8F9FA" FontWeight="Bold" FontSize="11" BorderThickness="0" Cursor="Hand" Click="RenameBtn_Click" Margin="0,0,5,0" Style="{StaticResource FlatButtonStyle}"/>
+                                                                <Button Grid.Column="3" Content="▶ Oynat" Height="30" Width="75" Background="#1D2A35" Foreground="#00F2FE" FontWeight="Bold" FontSize="11" BorderThickness="0" Cursor="Hand" Click="PlayClip_Click" Tag="{Binding FullPath}" Style="{StaticResource FlatButtonStyle}"/>
+                                                            </Grid>
+                                                        </Border>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                            <TextBlock x:Name="TxtNoClips" Text="Henüz kaydedilmiş klip yok." FontSize="11" Foreground="#ADB5BD" HorizontalAlignment="Center" Margin="0,5,0,0"/>
+                                        </StackPanel>
+                                    </Border>
+                                </StackPanel>
+
+                                <!-- PAGE 3: LICENSE INFO -->
+
+                                <StackPanel x:Name="PageVoiceTranslation" Visibility="Collapsed">
+                                    <Border Background="#1E2028" BorderBrush="#1C2F3D" BorderThickness="1" CornerRadius="16" Padding="25" Margin="0,0,0,20">
+                                        <StackPanel>
+                                            <StackPanel Orientation="Horizontal" Margin="0,0,0,15">
+                                                <TextBlock Text="🎤" FontSize="20" Foreground="#00F2FE" Margin="0,0,10,0"/>
+                                                <TextBlock Text="Gerçek Zamanlı Oyun İçi Ses Çevirisi" FontSize="18" FontWeight="Bold" Foreground="#F8F9FA" VerticalAlignment="Center"/>
+                                                <Border Background="#FF9900" CornerRadius="5" Padding="5,2" Margin="10,0,0,0" VerticalAlignment="Center">
+                                                    <TextBlock Text="Geliştirme Aşamasında" FontSize="10" FontWeight="Bold" Foreground="#11131A"/>
+                                                </Border>
+                                            </StackPanel>
+                                            <TextBlock Text="Konuşmalarınızı algılayıp eş zamanlı olarak seçtiğiniz dile çevirir ve sanal mikrofonunuza aktarır." Foreground="#ADB5BD" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                                            
+                                            <Border Background="#15171E" BorderBrush="#252833" BorderThickness="1" CornerRadius="8" Padding="10" Margin="0,0,0,15">
+                                                <TextBlock Text="💡 İpucu: Çevrilmiş sesi karşı tarafa iletmek için, kullanacağınız uygulamanın (örn. Discord) mikrofon ayarından 'CABLE Output (VB-Audio)' cihazını seçin." Foreground="#00F2FE" TextWrapping="Wrap" FontSize="11" FontWeight="Bold"/>
+                                            </Border>
+                                            
+                                            <!-- KART 1: İleri Çeviri (Senin Sesin) -->
+                                            <Border Background="#15171E" BorderBrush="#252833" BorderThickness="1" CornerRadius="8" Padding="15" Margin="0,0,0,15">
+                                                <StackPanel>
+                                                    <TextBlock Text="1. İleri Çeviri (Senin Sesin)" Foreground="#F8F9FA" FontWeight="Bold" FontSize="14" Margin="0,0,0,15"/>
+                                                    
+                                                    <!-- Dil Seçimi Bölümü -->
+                                                    <Grid Margin="0,0,0,15">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="30"/>
+                                                            <ColumnDefinition Width="*"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <StackPanel Grid.Column="0">
+                                                            <TextBlock Text="Senin Dilin:" Foreground="#ADB5BD" FontWeight="Bold" FontSize="12" Margin="0,0,0,5"/>
+                                                            <ComboBox x:Name="CmbVoiceSourceLang" Style="{StaticResource DarkComboBox}" Height="35" SelectedIndex="0">
+                                                                <ComboBoxItem Content="Türkçe (tr)"/>
+                                                                <ComboBoxItem Content="İngilizce (en)"/>
+                                                            </ComboBox>
+                                                        </StackPanel>
+                                                        
+                                                        <!-- Yönlendirme Oku -->
+                                                        <TextBlock Grid.Column="1" Text="➔" Foreground="#00F2FE" FontSize="20" FontWeight="Bold" VerticalAlignment="Bottom" HorizontalAlignment="Center" Margin="0,0,0,5"/>
+                                                        
+                                                        <StackPanel Grid.Column="2">
+                                                            <TextBlock Text="Çevrilecek Dil (Oyuna):" Foreground="#ADB5BD" FontWeight="Bold" FontSize="12" Margin="0,0,0,5"/>
+                                                            <ComboBox x:Name="CmbVoiceTargetLang" Style="{StaticResource DarkComboBox}" Height="35" SelectedIndex="1">
+                                                                <ComboBoxItem Content="İngilizce (en)"/>
+                                                                <ComboBoxItem Content="Rusça (ru)"/>
+                                                                <ComboBoxItem Content="Almanca (de)"/>
+                                                            </ComboBox>
+                                                        </StackPanel>
+                                                    </Grid>
+                                                    
+                                                    <!-- Ayracı Çizgi -->
+                                                    <Rectangle Height="1" Fill="#252833" Margin="0,0,0,15"/>
+
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="20"/>
+                                                            <ColumnDefinition Width="*"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <StackPanel Grid.Column="0">
+                                                            <TextBlock Text="Giriş (Senin Mikrofonun):" Foreground="#ADB5BD" FontWeight="Bold" FontSize="12" Margin="0,0,0,5"/>
+                                                            <ComboBox x:Name="CmbVoiceMic" Style="{StaticResource DarkComboBox}" Height="35" SelectedIndex="0">
+                                                                <ComboBoxItem Content="Varsayılan Mikrofon"/>
+                                                            </ComboBox>
+                                                        </StackPanel>
+                                                        <StackPanel Grid.Column="2">
+                                                            <TextBlock Text="Çıkış (Sanal Kablo):" Foreground="#ADB5BD" FontWeight="Bold" FontSize="12" Margin="0,0,0,5"/>
+                                                            <ComboBox x:Name="CmbVoiceOut" Style="{StaticResource DarkComboBox}" Height="35" SelectedIndex="0">
+                                                                <ComboBoxItem Content="Varsayılan Hoparlör"/>
+                                                            </ComboBox>
+                                                        </StackPanel>
+                                                    </Grid>
+                                                </StackPanel>
+                                            </Border>
+
+                                            <!-- KART 2: Geri Çeviri (Karşının Sesi) -->
+                                            <Border Background="#15171E" BorderBrush="#252833" BorderThickness="1" CornerRadius="8" Padding="15" Margin="0,0,0,20">
+                                                <StackPanel>
+                                                    <CheckBox x:Name="ChkReverseTranslation" Content="2. Geri Çeviriyi Aktifleştir (Karşının Sesi)" Foreground="#F8F9FA" FontWeight="Bold" FontSize="14" VerticalContentAlignment="Center" Margin="0,0,0,15"/>
+                                                    
+                                                    <Grid IsEnabled="{Binding ElementName=ChkReverseTranslation, Path=IsChecked}">
+                                                        <Grid.Style>
+                                                            <Style TargetType="Grid">
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding ElementName=ChkReverseTranslation, Path=IsChecked}" Value="False">
+                                                                        <Setter Property="Opacity" Value="0.4"/>
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </Grid.Style>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="20"/>
+                                                            <ColumnDefinition Width="*"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <StackPanel Grid.Column="0">
+                                                            <TextBlock Text="Dinlenecek Kaynak (Discord vb.):" FontSize="12" Foreground="#ADB5BD" FontWeight="Bold" Margin="0,0,0,5"/>
+                                                            <ComboBox x:Name="CmbReverseSource" Style="{StaticResource DarkComboBox}" Height="30" SelectedIndex="0">
+                                                                <ComboBoxItem Content="Varsayılan Hoparlör"/>
+                                                            </ComboBox>
+                                                        </StackPanel>
+                                                        <StackPanel Grid.Column="2">
+                                                            <TextBlock Text="Çeviri Ses Çıkışı (Kulaklığın):" FontSize="12" Foreground="#ADB5BD" FontWeight="Bold" Margin="0,0,0,5"/>
+                                                            <ComboBox x:Name="CmbReverseOutput" Style="{StaticResource DarkComboBox}" Height="30" SelectedIndex="0" Margin="0,0,0,5">
+                                                                <ComboBoxItem Content="Varsayılan Hoparlör"/>
+                                                            </ComboBox>
+                                                            <CheckBox x:Name="ChkReverseTTS" Content="Çeviriyi Sesli Oku (TTS)" Foreground="#ADB5BD" VerticalContentAlignment="Center" Margin="0,0,0,0"/>
+                                                        </StackPanel>
+                                                    </Grid>
+                                                </StackPanel>
+                                            </Border>
+
+                                            <Button x:Name="BtnVoiceStart" Content="🚀 Çeviriyi Başlat" Height="45" Background="#00F2FE" Foreground="#0B0C10" FontWeight="Bold" FontSize="14" BorderThickness="0" Cursor="Hand" Click="BtnVoiceStart_Click">
+                                                <Button.Resources>
+                                                    <Style TargetType="Border">
+                                                        <Setter Property="CornerRadius" Value="8"/>
+                                                    </Style>
+                                                </Button.Resources>
+                                            </Button>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <Border Background="#1E2028" BorderBrush="#1C2F3D" BorderThickness="1" CornerRadius="16" Padding="20">
+                                        <StackPanel>
+                                            <TextBlock Text="Çeviri Akışı" FontSize="14" FontWeight="Bold" Foreground="#F8F9FA" Margin="0,0,0,10"/>
+                                            <TextBox x:Name="TxtVoiceLog" Background="#0B0C10" Foreground="#00FF87" BorderBrush="#252833" Height="150" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="13" Padding="10"/>
+                                        </StackPanel>
+                                    </Border>
+                                </StackPanel>
+
+                                <StackPanel x:Name="PageLicense" Visibility="Collapsed">
+                                    <Border Background="#1E2028" BorderBrush="#1C2F3D" BorderThickness="1" CornerRadius="16" Padding="30" Margin="0,0,0,20">
+                                        <StackPanel>
+                                            <TextBlock Text="Hesap ve Lisans Bilgileri" FontSize="18" FontWeight="Bold" Foreground="#F8F9FA" Margin="0,0,0,5"/>
+                                            <TextBlock Text="AlpNet Pulse Kullanım haklarınız ve donanım bilgileriniz." FontSize="12" Foreground="#ADB5BD" Margin="0,0,0,20"/>
+                                            
+                                            <TextBlock Text="Donanım Kimliği (HWID)" FontSize="11" FontWeight="Bold" Foreground="#667EEA" Margin="0,0,0,5"/>
+                                            <TextBox x:Name="PageLicenseHwid" IsReadOnly="True" Background="#15171E" Foreground="#00F2FE" BorderBrush="#252833" Padding="10" FontSize="13" FontFamily="Consolas" Margin="0,0,0,20"/>
+
+                                            <TextBlock Text="Lisans DURUMU" FontSize="11" FontWeight="Bold" Foreground="#667EEA" Margin="0,0,0,5"/>
+                                            <TextBlock x:Name="PageLicenseStatus" Text="Lisans Aktif" FontSize="16" FontWeight="Bold" Foreground="#00FF87" Margin="0,0,0,5"/>
+                                            <TextBlock x:Name="PageLicenseExpiry" Text="Bitiş Tarihi: 23.05.2026" FontSize="12" Foreground="#ADB5BD" Margin="0,0,0,20"/>
+
+                                            <Separator Background="#252833" Margin="0,0,0,20"/>
+                                            <Button Content="LİSANSI CİHAZDAN KALDIR" Height="40" Width="200" HorizontalAlignment="Left" Background="Transparent" Foreground="#FF0844" BorderBrush="#FF0844" BorderThickness="1" Click="DeactivateLicense_Click" Cursor="Hand" Style="{StaticResource FlatButtonStyle}"/>
+                                        </StackPanel>
+                                    </Border>
+                                </StackPanel>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </Grid>
+                </Grid>
+            </Grid>
+            <!-- Blur / Overlay Container for Network Fixes -->
+            <Grid x:Name="OverlayGrid" Visibility="Collapsed" Background="#D8000000" Panel.ZIndex="9999">
+                <Border Background="#11131A" BorderBrush="#252833" BorderThickness="1" CornerRadius="12" HorizontalAlignment="Center" VerticalAlignment="Center" Padding="40" MaxWidth="400">
+                    <StackPanel>
+                        <TextBlock Text="AĞ ONARILIYOR" FontSize="20" FontWeight="Bold" Foreground="#F8F9FA" HorizontalAlignment="Center" Margin="0,0,0,10"/>
+                        <ProgressBar IsIndeterminate="True" Height="6" Margin="0,0,0,20" Foreground="#00FF87" Background="#1A1D28" BorderThickness="0"/>
+                        <TextBlock x:Name="OverlayStatusText" Text="Lütfen bekleyin..." FontSize="14" Foreground="#ADB5BD" HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap"/>
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </Grid>
+    </Border>
+</Window>
+
+
+
+
+
+
+
+
+

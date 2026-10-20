@@ -1,0 +1,100 @@
+<Window x:Class="AlpNetPulse.VideoPlayerWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="AlpNet Video Oynatıcı &amp; Düzenleyici" Height="600" Width="900"
+        Background="#0B0C10" WindowStartupLocation="CenterOwner">
+    <Window.Resources>
+        <!-- Flat Button Style -->
+        <Style x:Key="FlatButtonStyle" TargetType="Button">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="border" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="6">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="border" Property="Opacity" Value="0.8"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="border" Property="Opacity" Value="0.6"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="border" Property="Opacity" Value="0.3"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Video Player -->
+        <MediaElement x:Name="VideoPlayer" Grid.Row="0" LoadedBehavior="Manual" Stretch="Uniform" 
+                      MediaOpened="VideoPlayer_MediaOpened" MediaEnded="VideoPlayer_MediaEnded"
+                      MouseLeftButtonUp="VideoPlayer_MouseLeftButtonUp"/>
+        
+        <!-- Controls -->
+        <Border Grid.Row="1" Background="#15171E" Padding="15">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <Button x:Name="BtnPlayPause" Grid.Column="0" Content="▶ Oynat" Width="80" Height="35" Background="#667EEA" Foreground="White" FontWeight="Bold" BorderThickness="0" Style="{StaticResource FlatButtonStyle}" Click="BtnPlayPause_Click"/>
+                
+                <Grid Grid.Column="1" Margin="15,0">
+                    <Canvas x:Name="TimelineCanvas" VerticalAlignment="Center" Height="20" IsHitTestVisible="False" Margin="5,0">
+                        <Rectangle x:Name="RectSelection" Height="20" Fill="#3300F2FE" Visibility="Collapsed"/>
+                        <Rectangle x:Name="RectStart" Width="2" Height="20" Fill="#00F2FE" Visibility="Collapsed"/>
+                        <Rectangle x:Name="RectEnd" Width="2" Height="20" Fill="#FF0844" Visibility="Collapsed"/>
+                    </Canvas>
+                    <Slider x:Name="TimelineSlider" VerticalAlignment="Center" Minimum="0" Maximum="100" ValueChanged="TimelineSlider_ValueChanged" PreviewMouseDown="TimelineSlider_PreviewMouseDown" PreviewMouseUp="TimelineSlider_PreviewMouseUp"/>
+                </Grid>
+                
+                <TextBlock x:Name="TxtTime" Grid.Column="2" Text="00:00 / 00:00" Foreground="#ADB5BD" VerticalAlignment="Center" FontSize="14" FontWeight="Bold"/>
+            </Grid>
+        </Border>
+
+        <!-- Trimming Section -->
+        <Border Grid.Row="2" Background="#11131A" Padding="15" BorderBrush="#252833" BorderThickness="0,1,0,0">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                
+                <StackPanel Grid.Column="0" Orientation="Horizontal">
+                    <Button x:Name="BtnSetStart" Content="[ Başlangıç Seç" Width="110" Height="35" Background="#1D2A35" Foreground="#00F2FE" FontWeight="Bold" BorderThickness="0" Style="{StaticResource FlatButtonStyle}" Margin="0,0,10,0" Click="BtnSetStart_Click"/>
+                    <TextBlock x:Name="TxtStart" Text="00:00" Foreground="#00F2FE" VerticalAlignment="Center" FontSize="14" FontWeight="Bold" Width="50"/>
+                </StackPanel>
+
+                <StackPanel Grid.Column="2" Orientation="Horizontal">
+                    <TextBlock x:Name="TxtEnd" Text="00:00" Foreground="#FF0844" VerticalAlignment="Center" FontSize="14" FontWeight="Bold" Margin="0,0,10,0" TextAlignment="Right" Width="50"/>
+                    <Button x:Name="BtnSetEnd" Content="Bitiş Seç ]" Width="110" Height="35" Background="#1D2A35" Foreground="#FF0844" FontWeight="Bold" BorderThickness="0" Style="{StaticResource FlatButtonStyle}" Margin="0,0,15,0" Click="BtnSetEnd_Click"/>
+                    
+                    <StackPanel Orientation="Vertical" VerticalAlignment="Center" Margin="0,0,15,0">
+                        <CheckBox x:Name="ChkKeepSystemAudio" Content="Sistem Sesi" Foreground="#ADB5BD" IsChecked="True" FontSize="10" Margin="0,0,0,2"/>
+                        <CheckBox x:Name="ChkKeepMicAudio" Content="Mikrofon Sesi" Foreground="#ADB5BD" IsChecked="True" FontSize="10" Margin="0,0,0,2"/>
+                        <CheckBox x:Name="ChkDeleteOriginal" Content="Orijinali Sil" Foreground="#FF5555" IsChecked="False" FontSize="10"/>
+                    </StackPanel>
+
+                    <Button x:Name="BtnTrim" Content="💾 KAYDET" Width="140" Height="35" Background="#00F2FE" Foreground="#0B0C10" FontWeight="Bold" BorderThickness="0" Style="{StaticResource FlatButtonStyle}" Click="BtnTrim_Click"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>
