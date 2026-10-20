@@ -13,15 +13,15 @@
     <Product>AlpNet Pulse</Product>
     <Description>AlpNet Pulse Network Utility</Description>
     <Copyright>Copyright © 2026 AlpNet</Copyright>
-    <AssemblyVersion>2.2.5.0</AssemblyVersion>
-    <FileVersion>2.2.5.0</FileVersion>
-    <Version>2.2.5</Version>
+    <AssemblyVersion>2.2.6.0</AssemblyVersion>
+    <FileVersion>2.2.6.0</FileVersion>
+    <Version>2.2.6</Version>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.6" />
     <PackageReference Include="NAudio" Version="2.3.0" />
-    <PackageReference Include="Obfuscar" Version="2.2.50">
+    <PackageReference Include="Obfuscar" Version="2.2.40">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
@@ -33,6 +33,7 @@
     <Content Include="..\translator.exe">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Link>translator.exe</Link>
+      <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
     </Content>
   </ItemGroup>
   

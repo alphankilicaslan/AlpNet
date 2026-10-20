@@ -41,7 +41,12 @@ namespace AlpNetPulse
         private int _consecutiveFailures = 0;
         private Action<string>? _activeLogCallback;
 
-        public bool IsActive { get; private set; }
+        private bool _isActive;
+        public bool IsActive
+        {
+            get => _isActive || IsWireSockServiceRunning();
+            private set => _isActive = value;
+        }
         public bool IsBrowserVpnEnabled { get; set; } = false;
 
         public WarpManager(string? resDir = null)

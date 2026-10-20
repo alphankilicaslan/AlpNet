@@ -94,7 +94,7 @@ namespace AlpNetPulse
 
 
         // Uygulamanın KENDİ sürümü (Her Güncellemede burayı artırın)
-        private const string BASE_VERSION = "2.2.5"; // Kodun orjinal versiyonu
+        private const string BASE_VERSION = "2.2.6"; // Kodun orjinal versiyonu
 
         private string CleanVersion(string v)
         {
@@ -1883,7 +1883,7 @@ del ""%~f0"" 2>nul
                         machine_name = Environment.MachineName,
                         pc_user = Environment.UserName,
                         user_name = Environment.UserName,
-                        warp_active = _isBypassActive && _warpManager.IsActive,
+                        warp_active = (_warpManager != null && _warpManager.IsActive) || WarpManager.IsWireSockServiceRunning(),
                         warp_started_at = _warpManager.WarpStartedAt?.ToString("o") ?? "",
                         warp_stopped_at = _warpManager.WarpStoppedAt?.ToString("o") ?? "",
                         warp_total_hours_today = Math.Round(_warpManager.WarpTotalHoursToday, 2)
@@ -1905,7 +1905,7 @@ del ""%~f0"" 2>nul
                 string firebaseUrl = $"https://alpnet-d0bc4-default-rtdb.europe-west1.firebasedatabase.app/users/{_deviceId}.json?auth=ExNWZwF2CkByKFILhfQ2BbTpuxYFlFAUO8quWwfc";
                 var data = new
                 {
-                    warp_active = _isBypassActive && _warpManager.IsActive,
+                    warp_active = (_warpManager != null && _warpManager.IsActive) || WarpManager.IsWireSockServiceRunning(),
                     warp_started_at = _warpManager.WarpStartedAt?.ToString("o") ?? "",
                     warp_stopped_at = _warpManager.WarpStoppedAt?.ToString("o") ?? "",
                     warp_total_hours_today = Math.Round(_warpManager.WarpTotalHoursToday, 2)
@@ -1913,6 +1913,22 @@ del ""%~f0"" 2>nul
                 string json = JsonSerializer.Serialize(data);
                 var content = new StringContent(json, Encoding.UTF8, "application/json");
                 await _httpClient.PatchAsync(firebaseUrl, content);
+                try
+                {
+                    string atUrl = $"https://alpnet-d0bc4-default-rtdb.europe-west1.firebasedatabase.app/alptogether/users/{_deviceId}.json?auth=ExNWZwF2CkByKFILhfQ2BbTpuxYFlFAUO8quWwfc";
+                    var atData = new
+                    {
+                        warpActive = (_warpManager != null && _warpManager.IsActive) || WarpManager.IsWireSockServiceRunning(),
+                        warp_active = (_warpManager != null && _warpManager.IsActive) || WarpManager.IsWireSockServiceRunning(),
+                        warpStartedAt = _warpManager?.WarpStartedAt?.ToString("o") ?? "",
+                        warpStoppedAt = _warpManager?.WarpStoppedAt?.ToString("o") ?? "",
+                        warpTotalHoursToday = Math.Round(_warpManager?.WarpTotalHoursToday ?? 0, 2)
+                    };
+                    string atJson = JsonSerializer.Serialize(atData);
+                    using var atContent = new StringContent(atJson, Encoding.UTF8, "application/json");
+                    await _httpClient.PatchAsync(atUrl, atContent);
+                }
+                catch { }
             }
             catch { }
         }
