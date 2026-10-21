@@ -17,7 +17,7 @@ namespace AlpNetPulse
         private bool _isConnected = false;
 
         private string _currentState = "🚀 Akıllı Bypass Aktif";
-        private string _currentDetails = "🛡️ AlpNet Pulse v2.2.7";
+        private string _currentDetails = "🛡️ AlpNet Pulse v2.2.8";
 
         public void Start()
         {

@@ -12,6 +12,13 @@ namespace AlpNetPulse
 
         protected override void OnStartup(StartupEventArgs e)
         {
+            try
+            {
+                AlpNetTelemetryService.Instance.HookGlobalExceptions();
+                AlpNetTelemetryService.Instance.Info("BAŞLATMA", $"Uygulama açılıyor... Argümanlar: {string.Join(" ", e.Args)}");
+            }
+            catch { }
+
             string currentExe = Process.GetCurrentProcess().MainModule?.FileName ?? "";
             string exeName = Path.GetFileName(currentExe).ToLower();
             string installDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AlpNet");

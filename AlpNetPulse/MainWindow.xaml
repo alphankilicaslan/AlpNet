@@ -283,6 +283,9 @@
                             <!-- AlpTogether Ecosystem Cloud Verify -->
                             <Button x:Name="BtnCheckAlpTogether" Content="✦ AlpTogether Yetkisini Doğrula 🔄" Height="36" Background="#26FF2E93" Foreground="#FF5CAA" BorderBrush="#80FF2E93" BorderThickness="1" FontWeight="Bold" Click="CheckAlpTogether_Click" Cursor="Hand" Style="{StaticResource FlatButtonStyle}" Margin="0,8,0,0"/>
 
+                            <!-- Quick Diagnostic Send in Overlay -->
+                            <Button x:Name="BtnOverlaySendLogs" Content="📡 Sorun mu var? Teşhis Logu Gönder" Height="28" Background="Transparent" Foreground="#667EEA" BorderThickness="0" FontSize="11" FontWeight="SemiBold" Click="BtnOverlaySendLogs_Click" Cursor="Hand" Style="{StaticResource FlatButtonStyle}" Margin="0,6,0,0"/>
+
                             <!-- New Subscription / Trial Buttons -->
                             <StackPanel Margin="0,20,0,0">
                                 <TextBlock Text="VEYA SATIN ALIN / DENEYİN" FontSize="10" FontWeight="Bold" Foreground="#ADB5BD" HorizontalAlignment="Center" Margin="0,0,0,10"/>
@@ -333,7 +336,7 @@
                             <TextBlock Text="Bağlantı Türü" FontSize="10" Foreground="#ADB5BD" Margin="0,0,0,2"/>
                             <TextBlock x:Name="LblConnectionType" Text="Ethernet" FontSize="12" FontWeight="Bold" Foreground="#00FF87" Margin="0,0,0,10"/>
                             <TextBlock Text="Uygulama sürümü" FontSize="10" Foreground="#ADB5BD" Margin="0,0,0,2"/>
-                            <TextBlock x:Name="LblAppVersion" Text="v2.2.7" FontSize="12" FontWeight="Bold" Foreground="#F8F9FA" Margin="0,0,0,10"/>
+                            <TextBlock x:Name="LblAppVersion" Text="v2.2.8" FontSize="12" FontWeight="Bold" Foreground="#F8F9FA" Margin="0,0,0,10"/>
                             <Button x:Name="BtnRestartForUpdate" Content="Yeniden Başlat ve Güncelle" Background="#0088D6" Foreground="White" FontWeight="Bold" FontSize="11" Padding="10,5" BorderThickness="0" Cursor="Hand" Visibility="Collapsed" Click="BtnRestartForUpdate_Click">
                                 <Button.Resources>
                                     <Style TargetType="Border">
@@ -1292,6 +1295,80 @@
 
                                             <Separator Background="#252833" Margin="0,0,0,20"/>
                                             <Button Content="LİSANSI CİHAZDAN KALDIR" Height="40" Width="200" HorizontalAlignment="Left" Background="Transparent" Foreground="#FF0844" BorderBrush="#FF0844" BorderThickness="1" Click="DeactivateLicense_Click" Cursor="Hand" Style="{StaticResource FlatButtonStyle}"/>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <!-- Sorun Bildirimi ve Gelistirici Teshis Loglari Bolumu -->
+                                    <Border Background="#1E2028" BorderBrush="#1C2F3D" BorderThickness="1" CornerRadius="16" Padding="30" Margin="0,0,0,20">
+                                        <StackPanel>
+                                            <Grid Margin="0,0,0,12">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel Grid.Column="0">
+                                                    <TextBlock Text="Sorun Bildirimi &amp; Sistem Teşhis Logları" FontSize="18" FontWeight="Bold" Foreground="#F8F9FA" Margin="0,0,0,5"/>
+                                                    <TextBlock Text="Bağlantı kopması, oyun tüneli veya WireSock hatası yaşıyorsanız sistem loglarınızı AlpTogether geliştirici merkezine iletebilirsiniz." FontSize="12" Foreground="#ADB5BD" TextWrapping="Wrap"/>
+                                                </StackPanel>
+                                                <Border Grid.Column="1" Background="#2600F2FE" BorderBrush="#8000F2FE" BorderThickness="1" CornerRadius="8" Padding="10,5" VerticalAlignment="Center">
+                                                    <TextBlock Text="⚡ ALPTOGETHER CLOUD UYUMLU" FontSize="10" FontWeight="Bold" Foreground="#00F2FE" />
+                                                </Border>
+                                            </Grid>
+
+                                            <TextBlock Text="KULLANICI NOTU / SORUN AÇIKLAMASI (İSTEĞE BAĞLI)" FontSize="11" FontWeight="Bold" Foreground="#667EEA" Margin="0,6,0,6"/>
+                                            <TextBox x:Name="TxtLicenseDiagNote" 
+                                                     Height="65" 
+                                                     TextWrapping="Wrap" 
+                                                     AcceptsReturn="True" 
+                                                     Background="#15171E" 
+                                                     Foreground="#F8F9FA" 
+                                                     BorderBrush="#252833" 
+                                                     Padding="10" 
+                                                     FontSize="12" 
+                                                     FontFamily="Segoe UI" 
+                                                     Margin="0,0,0,15"
+                                                     ToolTip="Yaşadığınız sorunu kısaca yazabilirsiniz (örn: Roblox veya Discord tüneli bağlanmıyor, internet kesiliyor vb.)." />
+
+                                            <Grid Margin="0,0,0,12">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="12" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+
+                                                <Button Grid.Column="0" 
+                                                        x:Name="BtnSendDiagnosticLogs" 
+                                                        Content="🚀 TEŞHİS VE SİSTEM LOGLARINI GÖNDER" 
+                                                        Height="42" 
+                                                        Padding="22,0" 
+                                                        Background="#00F2FE" 
+                                                        Foreground="#0B0C10" 
+                                                        FontWeight="Bold" 
+                                                        FontSize="12" 
+                                                        Click="BtnSendDiagnosticLogs_Click" 
+                                                        Cursor="Hand" 
+                                                        Style="{StaticResource FlatButtonStyle}"/>
+
+                                                <Button Grid.Column="2" 
+                                                        x:Name="BtnOpenLocalLogs" 
+                                                        Content="📁 Yerel Log Klasörünü Aç" 
+                                                        Height="42" 
+                                                        Padding="16,0" 
+                                                        Background="Transparent" 
+                                                        Foreground="#ADB5BD" 
+                                                        BorderBrush="#252833" 
+                                                        BorderThickness="1" 
+                                                        FontWeight="SemiBold" 
+                                                        FontSize="12" 
+                                                        Click="BtnOpenLocalLogs_Click" 
+                                                        Cursor="Hand" 
+                                                        Style="{StaticResource FlatButtonStyle}"/>
+                                            </Grid>
+
+                                            <!-- Gonderim Sonuc Rozeti -->
+                                            <Border x:Name="PnlDiagStatus" Background="#15171E" BorderBrush="#252833" BorderThickness="1" CornerRadius="10" Padding="14,10" Visibility="Collapsed" Margin="0,4,0,0">
+                                                <TextBlock x:Name="TxtLicenseDiagStatus" Text="" FontSize="12" FontWeight="SemiBold" Foreground="#00FF87" TextWrapping="Wrap" />
+                                            </Border>
                                         </StackPanel>
                                     </Border>
                                 </StackPanel>

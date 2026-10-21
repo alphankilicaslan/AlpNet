@@ -1,6 +1,6 @@
 
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
-  <Package Name="AlpNet Pulse Web Setup" Manufacturer="AlpNet" Version="2.2.7.0" UpgradeCode="B54A7E19-76DF-4E90-951E-C639D9B75918">
+  <Package Name="AlpNet Pulse Web Setup" Manufacturer="AlpNet" Version="2.2.8.0" UpgradeCode="B54A7E19-76DF-4E90-951E-C639D9B75918">
     <MajorUpgrade AllowDowngrades="yes" />
     <MediaTemplate EmbedCab="yes" />
     <Property Id="REINSTALLMODE" Value="amus" />

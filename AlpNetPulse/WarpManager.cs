@@ -70,7 +70,7 @@ namespace AlpNetPulse
             {
                 Timeout = TimeSpan.FromSeconds(15)
             };
-            _http.DefaultRequestHeaders.Add("User-Agent", "AlpNetPulse/2.2.7");
+            _http.DefaultRequestHeaders.Add("User-Agent", "AlpNetPulse/2.2.8");
 
             LoadUsageToday();
         }
@@ -95,6 +95,13 @@ PersistentKeepalive = 15
         // ═══════════════════════════════════════════════════════════
         public async Task<bool> StartWarpAsync(Action<string> logCallback)
         {
+            var origLogCallback = logCallback;
+            logCallback = (msg) =>
+            {
+                AlpNetTelemetryService.Instance.Log("WARP", msg);
+                origLogCallback?.Invoke(msg);
+            };
+
             try
             {
                 if (IsActive)
@@ -242,6 +249,8 @@ PersistentKeepalive = 15
             }
             catch (Exception ex)
             {
+                AlpNetTelemetryService.Instance.Error("WARP", $"WARP başlatma hatası: {ex.Message}");
+                _ = AlpNetTelemetryService.Instance.ReportErrorImmediatelyAsync("WARP.StartWarpAsync", ex.Message, ex.ToString());
                 logCallback("Hata: " + ex.Message);
                 IsActive = false;
                 return false;
@@ -255,6 +264,7 @@ PersistentKeepalive = 15
         {
             try
             {
+                AlpNetTelemetryService.Instance.Log("WARP", "WARP Split Tüneli durduruluyor...");
                 StopWatchdog();
                 WarpStoppedAt = DateTime.UtcNow;
                 if (WarpStartedAt.HasValue)

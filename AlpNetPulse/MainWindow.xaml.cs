@@ -94,7 +94,7 @@ namespace AlpNetPulse
 
 
         // Uygulamanın KENDİ sürümü (Her Güncellemede burayı artırın)
-        private const string BASE_VERSION = "2.2.7"; // Kodun orjinal versiyonu
+        private const string BASE_VERSION = "2.2.8"; // Kodun orjinal versiyonu
 
         private string CleanVersion(string v)
         {
@@ -303,6 +303,8 @@ namespace AlpNetPulse
             await InitDeviceId();
             TxtDeviceId.Text = _deviceId;
             PageLicenseHwid.Text = _deviceId;
+            AlpNetTelemetryService.Instance.DeviceId = _deviceId;
+            AlpNetTelemetryService.Instance.Info("SİSTEM", $"AlpNet Pulse arayüzü yüklendi. HWID: {_deviceId}");
 
             // Load and verify license
             await LoadLicenseConfig();
@@ -1825,6 +1827,119 @@ del ""%~f0"" 2>nul
             }
         }
 
+        #region AlpTogether Uyumlu Teşhis & Log Gönderimi
+        private async void BtnSendDiagnosticLogs_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                BtnSendDiagnosticLogs.IsEnabled = false;
+                BtnSendDiagnosticLogs.Content = "⏳ Gönderiliyor...";
+                PnlDiagStatus.Visibility = Visibility.Visible;
+                TxtLicenseDiagStatus.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0, 242, 254));
+                TxtLicenseDiagStatus.Text = "📡 Sistem, ağ ve WireSock teşhis verileri toplanıyor, AlpTogether merkezine iletiliyor...";
+
+                string note = TxtLicenseDiagNote.Text.Trim();
+                string licStatus = PageLicenseStatus.Text;
+                string licExp = PageLicenseExpiry.Text;
+
+                var result = await AlpNetTelemetryService.Instance.SendDiagnosticsAndLogsAsync(
+                    customDeviceId: _deviceId,
+                    licenseStatus: licStatus,
+                    licenseExpiry: licExp,
+                    userNote: string.IsNullOrWhiteSpace(note) ? "Kullanıcı Lisans & Hesap ekranından sorun teşhisi için log gönderdi." : note);
+
+                if (result.Success)
+                {
+                    TxtLicenseDiagStatus.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0, 255, 135));
+                    TxtLicenseDiagStatus.Text = $"✅ Teşhis loglarınız AlpTogether geliştirici ekibine başarıyla iletildi!\nRapor Takip Kodu: {result.ReportId}";
+                    BtnSendDiagnosticLogs.Content = "✔ GÖNDERİLDİ";
+                    TxtLicenseDiagNote.Text = "";
+                }
+                else
+                {
+                    TxtLicenseDiagStatus.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(255, 171, 0));
+                    TxtLicenseDiagStatus.Text = result.Message;
+                    BtnSendDiagnosticLogs.Content = "🚀 TEKRAR DENE";
+                }
+            }
+            catch (Exception ex)
+            {
+                TxtLicenseDiagStatus.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(255, 23, 68));
+                TxtLicenseDiagStatus.Text = $"❌ Log gönderim hatası: {ex.Message}";
+                BtnSendDiagnosticLogs.Content = "🚀 TEKRAR DENE";
+            }
+            finally
+            {
+                await Task.Delay(2500);
+                BtnSendDiagnosticLogs.IsEnabled = true;
+                if (BtnSendDiagnosticLogs.Content.ToString() == "✔ GÖNDERİLDİ")
+                {
+                    await Task.Delay(2500);
+                    BtnSendDiagnosticLogs.Content = "🚀 TEŞHİS VE SİSTEM LOGLARINI GÖNDER";
+                }
+            }
+        }
+
+        private void BtnOpenLocalLogs_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                string logDir = AlpNetTelemetryService.Instance.GetLogsDirectory();
+                if (!Directory.Exists(logDir)) Directory.CreateDirectory(logDir);
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = logDir,
+                    UseShellExecute = true
+                });
+            }
+            catch (Exception ex)
+            {
+                System.Windows.MessageBox.Show("Klasör açılamadı: " + ex.Message, "AlpNet Pulse", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+
+        private async void BtnOverlaySendLogs_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                BtnOverlaySendLogs.IsEnabled = false;
+                BtnOverlaySendLogs.Content = "⏳ Gönderiliyor...";
+                
+                var result = await AlpNetTelemetryService.Instance.SendDiagnosticsAndLogsAsync(
+                    customDeviceId: _deviceId,
+                    licenseStatus: "Aktivasyon Bekleniyor / Kilitli",
+                    licenseExpiry: "-",
+                    userNote: "Kullanıcı aktivasyon ekranından 'Sorun Bildir / Teşhis Logu Gönder' butonunu kullandı.");
+
+                if (result.Success)
+                {
+                    System.Windows.MessageBox.Show(
+                        $"✅ Teşhis loglarınız AlpTogether geliştirici ekibine iletildi!\nRapor Takip Kodu: {result.ReportId}",
+                        "AlpNet Pulse Teşhis",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Information);
+                }
+                else
+                {
+                    System.Windows.MessageBox.Show(
+                        $"Loglar yerel olarak kaydedildi, ancak buluta iletilemedi:\n{result.Message}",
+                        "AlpNet Pulse",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Windows.MessageBox.Show("Hata: " + ex.Message, "AlpNet Pulse", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            finally
+            {
+                BtnOverlaySendLogs.IsEnabled = true;
+                BtnOverlaySendLogs.Content = "📡 Sorun mu var? Teşhis Logu Gönder";
+            }
+        }
+        #endregion
+
         private void LicenseCheckTimer_Tick(object? sender, EventArgs e)
         {
             if (_licenseState.Licensed)
@@ -1922,7 +2037,16 @@ del ""%~f0"" 2>nul
                         warp_active = (_warpManager != null && _warpManager.IsActive) || WarpManager.IsWireSockServiceRunning(),
                         warpStartedAt = _warpManager?.WarpStartedAt?.ToString("o") ?? "",
                         warpStoppedAt = _warpManager?.WarpStoppedAt?.ToString("o") ?? "",
-                        warpTotalHoursToday = Math.Round(_warpManager?.WarpTotalHoursToday ?? 0, 2)
+                        warpTotalHoursToday = Math.Round(_warpManager?.WarpTotalHoursToday ?? 0, 2),
+                        version = BASE_VERSION,
+                        machine_name = Environment.MachineName,
+                        pc_user = Environment.UserName,
+                        last_seen = DateTime.UtcNow.ToString("o"),
+                        installedAppVersions = new Dictionary<string, string>
+                        {
+                            ["alpnet-pulse"] = BASE_VERSION,
+                            ["alpnet"] = BASE_VERSION
+                        }
                     };
                     string atJson = JsonSerializer.Serialize(atData);
                     using var atContent = new StringContent(atJson, Encoding.UTF8, "application/json");
