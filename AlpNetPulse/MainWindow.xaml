@@ -333,7 +333,7 @@
                             <TextBlock Text="Bağlantı Türü" FontSize="10" Foreground="#ADB5BD" Margin="0,0,0,2"/>
                             <TextBlock x:Name="LblConnectionType" Text="Ethernet" FontSize="12" FontWeight="Bold" Foreground="#00FF87" Margin="0,0,0,10"/>
                             <TextBlock Text="Uygulama sürümü" FontSize="10" Foreground="#ADB5BD" Margin="0,0,0,2"/>
-                            <TextBlock x:Name="LblAppVersion" Text="v2.2.4" FontSize="12" FontWeight="Bold" Foreground="#F8F9FA" Margin="0,0,0,10"/>
+                            <TextBlock x:Name="LblAppVersion" Text="v2.2.7" FontSize="12" FontWeight="Bold" Foreground="#F8F9FA" Margin="0,0,0,10"/>
                             <Button x:Name="BtnRestartForUpdate" Content="Yeniden Başlat ve Güncelle" Background="#0088D6" Foreground="White" FontWeight="Bold" FontSize="11" Padding="10,5" BorderThickness="0" Cursor="Hand" Visibility="Collapsed" Click="BtnRestartForUpdate_Click">
                                 <Button.Resources>
                                     <Style TargetType="Border">

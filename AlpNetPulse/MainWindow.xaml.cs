@@ -94,7 +94,7 @@ namespace AlpNetPulse
 
 
         // Uygulamanın KENDİ sürümü (Her Güncellemede burayı artırın)
-        private const string BASE_VERSION = "2.2.6"; // Kodun orjinal versiyonu
+        private const string BASE_VERSION = "2.2.7"; // Kodun orjinal versiyonu
 
         private string CleanVersion(string v)
         {
@@ -3339,7 +3339,8 @@ del ""%~f0"" 2>nul
                                         // TCP NoDelay & Immediate ACK for ultra-low latency gaming
                                         ifaceKey.SetValue("TcpAckFrequency", 1, RegistryValueKind.DWord);
                                         ifaceKey.SetValue("TCPNoDelay", 1, RegistryValueKind.DWord);
-                                        ifaceKey.SetValue("TcpDelAckTicks", 0, RegistryValueKind.DWord);
+                                        // DÜZELTME: TcpDelAckTicks 0 yapılmamalıdır (0 geçersiz değerdir ve oyunlarda paket düşüşüne neden olur)
+                                        try { ifaceKey.DeleteValue("TcpDelAckTicks", false); } catch { }
                                     }
                                     else
                                     {
@@ -3388,7 +3389,7 @@ del ""%~f0"" 2>nul
                     try { p.Kill(); } catch { }
                 }
 
-                string cmdArgs = "/c \"taskkill /F /IM goodbyedpi.exe 2>nul & sc stop GoodbyeDPI 2>nul & sc delete GoodbyeDPI 2>nul & sc stop WinDivert 2>nul & sc delete WinDivert 2>nul & sc stop WinDivert14 2>nul & sc delete WinDivert14 2>nul & sc stop WinDivert1.4 2>nul & sc delete WinDivert1.4 2>nul\"";
+                string cmdArgs = "/c \"taskkill /F /IM goodbyedpi.exe 2>nul & sc.exe stop GoodbyeDPI 2>nul & sc.exe delete GoodbyeDPI 2>nul & sc.exe stop WinDivert 2>nul & sc.exe delete WinDivert 2>nul & sc.exe stop WinDivert14 2>nul & sc.exe delete WinDivert14 2>nul & sc.exe stop WinDivert1.4 2>nul & sc.exe delete WinDivert1.4 2>nul\"";
                 var killPsi = new ProcessStartInfo("cmd.exe", cmdArgs)
                 {
                     WindowStyle = ProcessWindowStyle.Hidden,
@@ -3405,7 +3406,7 @@ del ""%~f0"" 2>nul
         {
             try
             {
-                string pshCommand = "Get-NetAdapter | Set-DnsClientServerAddress -ResetServerAddresses -ErrorAction SilentlyContinue; Get-NetAdapter | Set-DnsClientServerAddress -Family IPv6 -ResetServerAddresses -ErrorAction SilentlyContinue";
+                string pshCommand = "Get-NetAdapter | Set-DnsClientServerAddress -ResetServerAddresses -ErrorAction SilentlyContinue; Get-NetAdapter | Set-DnsClientServerAddress -Family IPv6 -ResetServerAddresses -ErrorAction SilentlyContinue; if (Get-Command Set-DnsClientDohServerAddress -ErrorAction SilentlyContinue) { Set-DnsClientDohServerAddress -ServerAddress '1.1.1.1' -AutoUpgrade $false -ErrorAction SilentlyContinue; Set-DnsClientDohServerAddress -ServerAddress '1.0.0.1' -AutoUpgrade $false -ErrorAction SilentlyContinue; }; Clear-DnsClientCache; ipconfig /flushdns";
                 var processInfo = new ProcessStartInfo("powershell.exe", $"-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"{pshCommand}\"")
                 {
                     WindowStyle = ProcessWindowStyle.Hidden,
@@ -3712,7 +3713,19 @@ del ""%~f0"" 2>nul
             }
             catch { }
 
-            string[] files = { "goodbyedpi.exe", "WinDivert.dll", "WinDivert64.sys" };
+            // WinDivert ve GoodbyeDPI, Easy Anti-Cheat ve BattlEye tarafından engellendiği için çıkarılmaz.
+            // Bunun yerine eski kalıntılar temizlenir.
+            string[] files = Array.Empty<string>();
+            try
+            {
+                string[] badFiles = { "WinDivert64.sys", "WinDivert.dll", "WinDivert32.sys", "goodbyedpi.exe" };
+                foreach (var bf in badFiles)
+                {
+                    var fp = System.IO.Path.Combine(tempDir, bf);
+                    if (System.IO.File.Exists(fp)) { try { System.IO.File.Delete(fp); } catch { } }
+                }
+            }
+            catch { }
             var assembly = System.Reflection.Assembly.GetExecutingAssembly();
 
             foreach (var file in files)

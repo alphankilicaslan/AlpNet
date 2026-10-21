@@ -70,7 +70,7 @@ namespace AlpNetPulse
             {
                 Timeout = TimeSpan.FromSeconds(15)
             };
-            _http.DefaultRequestHeaders.Add("User-Agent", "AlpNetPulse/2.2.5");
+            _http.DefaultRequestHeaders.Add("User-Agent", "AlpNetPulse/2.2.7");
 
             LoadUsageToday();
         }
@@ -81,7 +81,6 @@ namespace AlpNetPulse
 @"[Interface]
 PrivateKey = ID6Va+b6e5vusYdSh8PkhB+Z8gOVPZFtq2/fni+1K1Q=
 Address = 172.16.0.2/32, 2606:4700:110:8369:e40f:6f09:1250:1c64/128
-DNS = 1.1.1.1, 1.0.0.1
 MTU = 1360
 
 [Peer]
@@ -293,7 +292,12 @@ PersistentKeepalive = 15
                         string psScript = 
                             "Get-NetAdapter | Where-Object Status -eq 'Up' | ForEach-Object { " +
                             "  Set-DnsClientServerAddress -InterfaceIndex $_.InterfaceIndex -ResetServerAddresses -ErrorAction SilentlyContinue " +
-                            "}; Clear-DnsClientCache; ipconfig /flushdns";
+                            "}; " +
+                            "if (Get-Command Set-DnsClientDohServerAddress -ErrorAction SilentlyContinue) { " +
+                            "  Set-DnsClientDohServerAddress -ServerAddress '1.1.1.1' -AutoUpgrade $false -ErrorAction SilentlyContinue; " +
+                            "  Set-DnsClientDohServerAddress -ServerAddress '1.0.0.1' -AutoUpgrade $false -ErrorAction SilentlyContinue; " +
+                            "}; " +
+                            "Clear-DnsClientCache; ipconfig /flushdns";
 
                         var psi = new ProcessStartInfo("powershell.exe", $"-NoProfile -ExecutionPolicy Bypass -Command \"{psScript}\"")
                         {
@@ -513,34 +517,31 @@ PersistentKeepalive = 15
                 bool keepaliveAdded = false;
                 bool allowedAppsAdded = false;
                 bool mtuAdded = false;
-                bool dnsAdded = false;
 
                 foreach (var line in lines)
                 {
                     string trimmed = line.Trim();
 
-                    // Mükerrer / eski AllowedApps, DisallowedApps, AllowedDomains ve PersistentKeepalive satırlarını atla
+                    // Mükerrer / eski AllowedApps, DisallowedApps, AllowedDomains, PersistentKeepalive ve DNS satırlarını atla
+                    // ÖNEMLİ: DNS satırı profilden tamamen temizlenir. Böylece WireSock yalnızca AllowedApps içindeki Discord/Roblox'u tüneller;
+                    // Rust, Steam, Easy Anti-Cheat ve diğer oyunların sistem DNS sorgularına ASLA dokunmaz!
                     if (trimmed.StartsWith("AllowedApps", StringComparison.OrdinalIgnoreCase) ||
                         trimmed.StartsWith("DisallowedApps", StringComparison.OrdinalIgnoreCase) ||
                         trimmed.StartsWith("AllowedDomains", StringComparison.OrdinalIgnoreCase) ||
                         trimmed.StartsWith("DisallowedDomains", StringComparison.OrdinalIgnoreCase) ||
-                        trimmed.StartsWith("PersistentKeepalive", StringComparison.OrdinalIgnoreCase))
+                        trimmed.StartsWith("PersistentKeepalive", StringComparison.OrdinalIgnoreCase) ||
+                        trimmed.StartsWith("DNS", StringComparison.OrdinalIgnoreCase))
                     {
                         continue;
                     }
 
                     if (trimmed.StartsWith("[Peer]", StringComparison.OrdinalIgnoreCase))
                     {
-                        // [Interface] bitmeden MTU veya DNS eklenmediyse araya enjekte et
+                        // [Interface] bitmeden MTU eklenmediyse araya enjekte et
                         if (!mtuAdded)
                         {
                             newLines.Add("MTU = 1360");
                             mtuAdded = true;
-                        }
-                        if (!dnsAdded)
-                        {
-                            newLines.Add("DNS = 1.1.1.1, 1.0.0.1");
-                            dnsAdded = true;
                         }
 
                         inPeerSection = true;
@@ -552,13 +553,6 @@ PersistentKeepalive = 15
                     {
                         newLines.Add("MTU = 1360");
                         mtuAdded = true;
-                        continue;
-                    }
-
-                    if (trimmed.StartsWith("DNS", StringComparison.OrdinalIgnoreCase))
-                    {
-                        newLines.Add("DNS = 1.1.1.1, 1.0.0.1");
-                        dnsAdded = true;
                         continue;
                     }
 
@@ -880,6 +874,7 @@ PersistentKeepalive = 15
                     p1?.WaitForExit(2000);
 
                     // 2) PowerShell ile TÜM aktif bağdaştırıcıları ayarla: IPv4 DNS Cloudflare, IPv6 DNS sıfırla (timeout engelle)
+                    // DoH AutoUpgrade devre dışı bırakılır (AutoUpgrade=$false); böylece oyunlar (Rust, Steam) ve Easy Anti-Cheat standart UDP port 53 üzerinden engelsiz ve 0 gecikmeyle çalışır.
                     string psCmd = 
                         "$adapters = Get-NetAdapter | Where-Object Status -eq 'Up'; " +
                         "$adapters | ForEach-Object { " +
@@ -887,8 +882,8 @@ PersistentKeepalive = 15
                         "  Set-DnsClientServerAddress -InterfaceIndex $_.InterfaceIndex -Family IPv6 -ResetServerAddresses -ErrorAction SilentlyContinue " +
                         "}; " +
                         "if (Get-Command Set-DnsClientDohServerAddress -ErrorAction SilentlyContinue) { " +
-                        "  Set-DnsClientDohServerAddress -ServerAddress '1.1.1.1' -DohTemplate 'https://cloudflare-dns.com/dns-query' -AllowFallbackToUdp $true -AutoUpgrade $true -ErrorAction SilentlyContinue; " +
-                        "  Set-DnsClientDohServerAddress -ServerAddress '1.0.0.1' -DohTemplate 'https://cloudflare-dns.com/dns-query' -AllowFallbackToUdp $true -AutoUpgrade $true -ErrorAction SilentlyContinue; " +
+                        "  Set-DnsClientDohServerAddress -ServerAddress '1.1.1.1' -AutoUpgrade $false -ErrorAction SilentlyContinue; " +
+                        "  Set-DnsClientDohServerAddress -ServerAddress '1.0.0.1' -AutoUpgrade $false -ErrorAction SilentlyContinue; " +
                         "}; " +
                         "Clear-DnsClientCache; ipconfig /flushdns";
 
@@ -1174,7 +1169,7 @@ PersistentKeepalive = 15
                 }
 
                 // Çakışan WinDivert ve GoodbyeDPI servislerini durdur/kaldır
-                string cmdArgs = "/c \"sc stop WinDivert 2>nul & sc delete WinDivert 2>nul & sc stop WinDivert14 2>nul & sc delete WinDivert14 2>nul & sc stop GoodbyeDPI 2>nul & sc delete GoodbyeDPI 2>nul\"";
+                string cmdArgs = "/c \"sc.exe stop WinDivert 2>nul & sc.exe delete WinDivert 2>nul & sc.exe stop WinDivert14 2>nul & sc.exe delete WinDivert14 2>nul & sc.exe stop WinDivert1.4 2>nul & sc.exe delete WinDivert1.4 2>nul & sc.exe stop GoodbyeDPI 2>nul & sc.exe delete GoodbyeDPI 2>nul\"";
                 var psi = new ProcessStartInfo("cmd.exe", cmdArgs)
                 {
                     WindowStyle = ProcessWindowStyle.Hidden,
@@ -1183,6 +1178,26 @@ PersistentKeepalive = 15
                 };
                 using var p2 = Process.Start(psi);
                 p2?.WaitForExit(1000);
+
+                // Easy Anti-Cheat ve BattlEye için temp klasörlerindeki eski sürücü/dosya kalıntılarını temizle
+                try
+                {
+                    string[] tempFolders = {
+                        Path.Combine(Path.GetTempPath(), "AlpBypass"),
+                        Path.Combine(Path.GetTempPath(), "AlpNetInstall")
+                    };
+                    foreach (var tf in tempFolders)
+                    {
+                        if (!Directory.Exists(tf)) continue;
+                        string[] badFiles = { "WinDivert64.sys", "WinDivert.dll", "WinDivert32.sys", "goodbyedpi.exe" };
+                        foreach (var bf in badFiles)
+                        {
+                            var fp = Path.Combine(tf, bf);
+                            if (File.Exists(fp)) { try { File.Delete(fp); } catch { } }
+                        }
+                    }
+                }
+                catch { }
             }
             catch { }
         }
