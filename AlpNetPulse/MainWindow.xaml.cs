@@ -94,7 +94,7 @@ namespace AlpNetPulse
 
 
         // Uygulamanın KENDİ sürümü (Her Güncellemede burayı artırın)
-        private const string BASE_VERSION = "2.2.8"; // Kodun orjinal versiyonu
+        private const string BASE_VERSION = "2.2.9"; // Kodun orjinal versiyonu
 
         private string CleanVersion(string v)
         {

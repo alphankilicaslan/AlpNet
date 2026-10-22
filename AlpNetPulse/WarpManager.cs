@@ -70,7 +70,7 @@ namespace AlpNetPulse
             {
                 Timeout = TimeSpan.FromSeconds(15)
             };
-            _http.DefaultRequestHeaders.Add("User-Agent", "AlpNetPulse/2.2.8");
+            _http.DefaultRequestHeaders.Add("User-Agent", "AlpNetPulse/2.2.9");
 
             LoadUsageToday();
         }
@@ -81,6 +81,7 @@ namespace AlpNetPulse
 @"[Interface]
 PrivateKey = ID6Va+b6e5vusYdSh8PkhB+Z8gOVPZFtq2/fni+1K1Q=
 Address = 172.16.0.2/32, 2606:4700:110:8369:e40f:6f09:1250:1c64/128
+DNS = 1.1.1.1, 1.0.0.1
 MTU = 1360
 
 [Peer]
@@ -104,12 +105,6 @@ PersistentKeepalive = 15
 
             try
             {
-                if (IsActive)
-                {
-                    logCallback("WARP zaten aktif.");
-                    return true;
-                }
-
                 // Eski artık servisleri temizle
                 PurgeDpiServices();
 
@@ -190,17 +185,30 @@ PersistentKeepalive = 15
                     }
                 }
 
-                // Split tunnel yapılandırmasını doğrula (Port 500, PersistentKeepalive=25, IPv6 ve temiz AllowedApps)
-                await ModifyConfigurationAsync(profilePath);
+                // Split tunnel yapılandırmasını doğrula (DNS = 1.1.1.1, Port 500, PersistentKeepalive=15, IPv6 ve temiz AllowedApps)
+                bool configUpdated = await ModifyConfigurationAsync(profilePath);
 
-                // Adım 4: WireSock servisini güvenli ve ultra hızlı başlat (~150ms)
-                logCallback("WARP tüneli başlatılıyor...");
+                // Adım 3: WireSock servisini güvenli ve ultra hızlı başlat (~150ms)
+                logCallback("WARP tüneli yapılandırılıyor...");
                 string installArgs = $"install -start-type 2 -config \"{profilePath}\" -log-level none";
 
                 bool isInstalled = IsWireSockServiceInstalled();
-                if (isInstalled && IsWireSockServiceRunning())
+                bool isRunning = IsWireSockServiceRunning();
+
+                if (isRunning && !configUpdated)
                 {
                     logCallback("WireSock servisi devrede, tünel hazır.");
+                }
+                else if (isRunning && configUpdated)
+                {
+                    logCallback("WARP tüneli şifreli Cloudflare DNS ile yenileniyor...");
+                    await ExecuteCommandAsync("net", "stop wiresock-client-service");
+                    await Task.Delay(150);
+                    int restartRes = await ExecuteCommandAsync("net", "start wiresock-client-service");
+                    if (restartRes != 0)
+                    {
+                        await ExecuteCommandAsync("sc", "start wiresock-client-service");
+                    }
                 }
                 else if (isInstalled)
                 {
@@ -232,7 +240,7 @@ PersistentKeepalive = 15
                     }
                 }
 
-                // DNS ayarla, HTTP/3 QUIC etkinleştir ve hedef domainleri ön ısıt (DNS warmup)
+                // DNS ayarla, DoH şifrelemeyi etkinleştir, HTTP/3 QUIC etkinleştir ve hedef domainleri ön ısıt (DNS warmup)
                 _ = Task.Run(async () =>
                 {
                     EnsureBrowserHttp3QuicEnabled();
@@ -527,26 +535,38 @@ PersistentKeepalive = 15
                 bool keepaliveAdded = false;
                 bool allowedAppsAdded = false;
                 bool mtuAdded = false;
+                bool dnsAdded = false;
 
                 foreach (var line in lines)
                 {
                     string trimmed = line.Trim();
 
-                    // Mükerrer / eski AllowedApps, DisallowedApps, AllowedDomains, PersistentKeepalive ve DNS satırlarını atla
-                    // ÖNEMLİ: DNS satırı profilden tamamen temizlenir. Böylece WireSock yalnızca AllowedApps içindeki Discord/Roblox'u tüneller;
-                    // Rust, Steam, Easy Anti-Cheat ve diğer oyunların sistem DNS sorgularına ASLA dokunmaz!
+                    // Mükerrer / eski AllowedApps, DisallowedApps, AllowedDomains ve PersistentKeepalive satırlarını atla
                     if (trimmed.StartsWith("AllowedApps", StringComparison.OrdinalIgnoreCase) ||
                         trimmed.StartsWith("DisallowedApps", StringComparison.OrdinalIgnoreCase) ||
                         trimmed.StartsWith("AllowedDomains", StringComparison.OrdinalIgnoreCase) ||
                         trimmed.StartsWith("DisallowedDomains", StringComparison.OrdinalIgnoreCase) ||
-                        trimmed.StartsWith("PersistentKeepalive", StringComparison.OrdinalIgnoreCase) ||
-                        trimmed.StartsWith("DNS", StringComparison.OrdinalIgnoreCase))
+                        trimmed.StartsWith("PersistentKeepalive", StringComparison.OrdinalIgnoreCase))
                     {
+                        continue;
+                    }
+
+                    if (trimmed.StartsWith("DNS", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Şifreli Cloudflare DNS: ISS DNS zehirlenmesini ve engellemelerini %100 önler
+                        newLines.Add("DNS = 1.1.1.1, 1.0.0.1");
+                        dnsAdded = true;
                         continue;
                     }
 
                     if (trimmed.StartsWith("[Peer]", StringComparison.OrdinalIgnoreCase))
                     {
+                        if (!dnsAdded)
+                        {
+                            newLines.Add("DNS = 1.1.1.1, 1.0.0.1");
+                            dnsAdded = true;
+                        }
+
                         // [Interface] bitmeden MTU eklenmediyse araya enjekte et
                         if (!mtuAdded)
                         {
@@ -597,7 +617,14 @@ PersistentKeepalive = 15
                     if (!allowedAppsAdded) newLines.Add(allowedAppsLine);
                 }
 
-                await File.WriteAllLinesAsync(profilePath, newLines);
+                string oldContent = string.Join("\n", lines.Select(l => l.Trim()));
+                string newContent = string.Join("\n", newLines.Select(l => l.Trim()));
+                bool hasChanged = !string.Equals(oldContent, newContent, StringComparison.Ordinal);
+
+                if (hasChanged || !File.Exists(profilePath))
+                {
+                    await File.WriteAllLinesAsync(profilePath, newLines);
+                }
 
                 // Eğer AppData altındaki AlpNet res dizini farklıysa oraya da senkronize et
                 try
@@ -688,6 +715,7 @@ PersistentKeepalive = 15
         {
             try
             {
+                bool detectedPoisoning = false;
                 var tasks = new List<Task>();
                 foreach (var d in TargetDomains)
                 {
@@ -696,12 +724,27 @@ PersistentKeepalive = 15
                         try
                         {
                             using var cts = new System.Threading.CancellationTokenSource(3000);
-                            await System.Net.Dns.GetHostAddressesAsync(d, cts.Token);
+                            var addrs = await System.Net.Dns.GetHostAddressesAsync(d, cts.Token);
+                            if (addrs.Any(a => a.ToString().StartsWith("195.175.")))
+                            {
+                                detectedPoisoning = true;
+                            }
                         }
                         catch { }
                     }));
                 }
                 await Task.WhenAll(tasks);
+
+                if (detectedPoisoning)
+                {
+                    AlpNetTelemetryService.Instance.Warn("DNS", "ISS DNS Zehirlenmesi (195.175.x.x) algılandı! DNS önbelleği zorla temizleniyor...");
+                    try
+                    {
+                        using var p = Process.Start(new ProcessStartInfo("cmd.exe", "/c ipconfig /flushdns") { WindowStyle = ProcessWindowStyle.Hidden, CreateNoWindow = true });
+                        p?.WaitForExit(2000);
+                    }
+                    catch { }
+                }
             }
             catch { }
         }
@@ -884,7 +927,6 @@ PersistentKeepalive = 15
                     p1?.WaitForExit(2000);
 
                     // 2) PowerShell ile TÜM aktif bağdaştırıcıları ayarla: IPv4 DNS Cloudflare, IPv6 DNS sıfırla (timeout engelle)
-                    // DoH AutoUpgrade devre dışı bırakılır (AutoUpgrade=$false); böylece oyunlar (Rust, Steam) ve Easy Anti-Cheat standart UDP port 53 üzerinden engelsiz ve 0 gecikmeyle çalışır.
                     string psCmd = 
                         "$adapters = Get-NetAdapter | Where-Object Status -eq 'Up'; " +
                         "$adapters | ForEach-Object { " +
@@ -892,8 +934,8 @@ PersistentKeepalive = 15
                         "  Set-DnsClientServerAddress -InterfaceIndex $_.InterfaceIndex -Family IPv6 -ResetServerAddresses -ErrorAction SilentlyContinue " +
                         "}; " +
                         "if (Get-Command Set-DnsClientDohServerAddress -ErrorAction SilentlyContinue) { " +
-                        "  Set-DnsClientDohServerAddress -ServerAddress '1.1.1.1' -AutoUpgrade $false -ErrorAction SilentlyContinue; " +
-                        "  Set-DnsClientDohServerAddress -ServerAddress '1.0.0.1' -AutoUpgrade $false -ErrorAction SilentlyContinue; " +
+                        "  Set-DnsClientDohServerAddress -ServerAddress '1.1.1.1' -DohTemplate 'https://cloudflare-dns.com/dns-query' -AllowFallbackToUdp $true -AutoUpgrade $true -ErrorAction SilentlyContinue; " +
+                        "  Set-DnsClientDohServerAddress -ServerAddress '1.0.0.1' -DohTemplate 'https://cloudflare-dns.com/dns-query' -AllowFallbackToUdp $true -AutoUpgrade $true -ErrorAction SilentlyContinue; " +
                         "}; " +
                         "Clear-DnsClientCache; ipconfig /flushdns";
 

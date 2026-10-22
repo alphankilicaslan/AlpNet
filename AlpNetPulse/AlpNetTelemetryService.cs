@@ -27,7 +27,7 @@ namespace AlpNetPulse
         private const string FIREBASE_AUTH_SECRET = "ExNWZwF2CkByKFILhfQ2BbTpuxYFlFAUO8quWwfc";
         public const string APP_ID = "alpnet-pulse";
         public const string APP_NAME = "AlpNet Pulse";
-        public const string APP_VERSION = "2.2.8";
+        public const string APP_VERSION = "2.2.9";
 
         private readonly HttpClient _http;
         private readonly string _logsDir;
@@ -304,21 +304,25 @@ namespace AlpNetPulse
 
             // C. WireSock & WARP Servis Durumu
             diagBuilder.AppendLine("[WIRESOCK / WARP TEŞHİSİ]");
-            bool wsProcRunning = Process.GetProcessesByName("wiresock").Length > 0;
+            bool wsProcRunning = Process.GetProcessesByName("wiresock-client").Length > 0 || Process.GetProcessesByName("wiresock").Length > 0;
             diagBuilder.AppendLine($"• WireSock Process     : {(wsProcRunning ? "ÇALIŞIYOR" : "ÇALIŞMIYOR")}");
             bool wsServiceRunning = WarpManager.IsWireSockServiceRunning();
             diagBuilder.AppendLine($"• WireSock Service     : {(wsServiceRunning ? "AKTİF / RUNNING" : "DURDURULDU VEYA YOK")}");
 
+            string? wsBinaryPath = WarpManager.FindWireSockPath();
+            diagBuilder.AppendLine($"• WireSock Binary      : {(string.IsNullOrEmpty(wsBinaryPath) ? "YOK (Bulunamadı)" : wsBinaryPath)}");
+
             string resDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "res");
-            string wsExe = Path.Combine(resDir, "wiresock.exe");
             string wgcfExe = Path.Combine(resDir, "wgcf.exe");
             string wgcfProfile = Path.Combine(resDir, "wgcf-profile.conf");
-            string wsConf = Path.Combine(resDir, "wiresock.conf");
+            if (!File.Exists(wgcfProfile))
+            {
+                string appDataProfile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AlpNet", "res", "wgcf-profile.conf");
+                if (File.Exists(appDataProfile)) wgcfProfile = appDataProfile;
+            }
 
-            diagBuilder.AppendLine($"• res/wiresock.exe     : {(File.Exists(wsExe) ? "Mevcut (" + new FileInfo(wsExe).Length + " B)" : "YOK")}");
             diagBuilder.AppendLine($"• res/wgcf.exe         : {(File.Exists(wgcfExe) ? "Mevcut (" + new FileInfo(wgcfExe).Length + " B)" : "YOK")}");
-            diagBuilder.AppendLine($"• res/wgcf-profile.conf: {(File.Exists(wgcfProfile) ? "Mevcut" : "YOK")}");
-            diagBuilder.AppendLine($"• res/wiresock.conf    : {(File.Exists(wsConf) ? "Mevcut" : "YOK")}");
+            diagBuilder.AppendLine($"• wgcf-profile.conf    : {(File.Exists(wgcfProfile) ? "Mevcut" : "YOK")}");
 
             // WARP profil detayları
             if (File.Exists(wgcfProfile))
@@ -328,8 +332,10 @@ namespace AlpNetPulse
                     string profileText = File.ReadAllText(wgcfProfile);
                     string endpoint = System.Text.RegularExpressions.Regex.Match(profileText, @"Endpoint\s*=\s*(.+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase).Groups[1].Value.Trim();
                     string mtu = System.Text.RegularExpressions.Regex.Match(profileText, @"MTU\s*=\s*(.+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase).Groups[1].Value.Trim();
+                    string dns = System.Text.RegularExpressions.Regex.Match(profileText, @"DNS\s*=\s*(.+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase).Groups[1].Value.Trim();
                     diagBuilder.AppendLine($"  -> Profil Endpoint   : {endpoint}");
                     diagBuilder.AppendLine($"  -> Profil MTU        : {mtu}");
+                    diagBuilder.AppendLine($"  -> Profil Tünel DNS  : {(string.IsNullOrEmpty(dns) ? "YOK (⚠️ ISS DNS Zehirlemesine Açık!)" : dns + " (Korumalı)")}");
                 }
                 catch { }
             }
@@ -370,8 +376,10 @@ namespace AlpNetPulse
             string warpTest = await TestTcpPortAsync("162.159.192.1", 500, 1500);
             diagBuilder.AppendLine($"• Cloudflare WARP IP (162.159.192.1:500): {warpTest}");
             string discordDns = ResolveHost("discord.com");
+            if (discordDns.Contains("195.175.")) discordDns += " ⚠️ (BTK/ISS Engelleme IP'si - Zehirlenmiş DNS!)";
             diagBuilder.AppendLine($"• DNS 'discord.com'                  : {discordDns}");
             string robloxDns = ResolveHost("roblox.com");
+            if (robloxDns.Contains("195.175.")) robloxDns += " ⚠️ (BTK/ISS Engelleme IP'si - Zehirlenmiş DNS!)";
             diagBuilder.AppendLine($"• DNS 'roblox.com'                   : {robloxDns}");
             diagBuilder.AppendLine();
 
