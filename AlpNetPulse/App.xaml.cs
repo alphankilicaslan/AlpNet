@@ -10,6 +10,14 @@ namespace AlpNetPulse
     {
         private Mutex? _mutex;
 
+        [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true, CharSet = System.Runtime.InteropServices.CharSet.Auto)]
+        private static extern uint RegisterWindowMessage(string lpString);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+
+        private const int HWND_BROADCAST = 0xffff;
+
         public static void ReleaseSingleInstanceMutex()
         {
             try
@@ -130,9 +138,11 @@ namespace AlpNetPulse
                 _mutex = new Mutex(true, "AlpNetPulse_SingleInstance_Mutex", out isNewInstance);
                 if (!isNewInstance)
                 {
-                    AlpNetTelemetryService.Instance.Warn("BAŞLATMA", "Mutex halihazırda mevcut. Olası bir güncelleme veya önceki sürecin kapanması bekleniyor (max 6 sn)...");
-                    // Wait up to 6 seconds for previous instance (e.g. during auto-update) to terminate
-                    if (_mutex.WaitOne(TimeSpan.FromSeconds(6), false))
+                    bool isUpdatedLaunch = e.Args.Any(a => a.Equals("/updated", StringComparison.OrdinalIgnoreCase) || a.Equals("-updated", StringComparison.OrdinalIgnoreCase));
+                    int waitTimeoutSeconds = isUpdatedLaunch ? 8 : 1;
+                    AlpNetTelemetryService.Instance.Warn("BAŞLATMA", $"Mutex halihazırda mevcut. Bekleniyor ({waitTimeoutSeconds} sn, updated={isUpdatedLaunch})...");
+                    // Wait for previous instance (e.g. during auto-update) to terminate
+                    if (_mutex.WaitOne(TimeSpan.FromSeconds(waitTimeoutSeconds), false))
                     {
                         isNewInstance = true;
                         AlpNetTelemetryService.Instance.Info("BAŞLATMA", "Önceki süreç kapandı, Mutex sahipliği başarıyla devralındı.");
@@ -153,7 +163,13 @@ namespace AlpNetPulse
 
             if (!isNewInstance)
             {
-                AlpNetTelemetryService.Instance.Warn("BAŞLATMA", "AlpNet Pulse zaten arka planda çalışıyor. Yeni başlatılan örnek sonlandırılıyor.");
+                AlpNetTelemetryService.Instance.Warn("BAŞLATMA", "AlpNet Pulse zaten arka planda çalışıyor. Mevcut pencere öne getiriliyor ve bu örnek kapatılıyor.");
+                try
+                {
+                    uint showMsg = RegisterWindowMessage("AlpNetPulse_ShowWindowMessage");
+                    PostMessage((IntPtr)HWND_BROADCAST, showMsg, IntPtr.Zero, IntPtr.Zero);
+                }
+                catch { }
                 Shutdown();
                 return;
             }
@@ -249,6 +265,13 @@ namespace AlpNetPulse
                     }
                     catch { }
                 }
+
+                try
+                {
+                    var flushTask = AlpNetTelemetryService.Instance.FlushUserLogsToCloudAsync();
+                    flushTask.Wait(2000);
+                }
+                catch { }
             }
             catch { }
         }

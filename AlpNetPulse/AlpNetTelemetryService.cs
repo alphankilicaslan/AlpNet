@@ -45,6 +45,13 @@ namespace AlpNetPulse
         private int _pendingLogCount = 0;
 
         public string DeviceId { get; set; } = string.Empty;
+        public string? AlpTogetherUserId { get; set; }
+        public string? AdminAlias { get; set; }
+        public string? LicenseStatus { get; set; }
+        public string? DnsMode { get; set; }
+        public bool WarpActive { get; set; }
+        public string? LastError { get; private set; }
+        public string? LastLog { get; private set; }
 
         private AlpNetTelemetryService()
         {
@@ -137,6 +144,12 @@ namespace AlpNetPulse
         {
             string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");
             string line = $"[{timestamp}] [{level,-5}] [{category}] {message}";
+
+            LastLog = line;
+            if (level == "ERROR" || level == "FATAL")
+            {
+                LastError = $"[{timestamp}] [{category}] {message}";
+            }
 
             _recentLogs.Enqueue(line);
             while (_recentLogs.Count > MAX_LOG_BUFFER)
@@ -302,12 +315,14 @@ namespace AlpNetPulse
                 {
                     last_seen = DateTime.UtcNow.ToString("o"),
                     last_log = $"[{timestamp}] [{level}] [{category}] {message}",
-                    last_error = level == "ERROR" ? $"[{timestamp}] [{category}] {message}" : "",
+                    last_error = level == "ERROR" ? $"[{timestamp}] [{category}] {message}" : (LastError ?? ""),
                     version = APP_VERSION,
-                    clientVersion = APP_VERSION
+                    clientVersion = APP_VERSION,
+                    warpActive = WarpActive
                 };
 
-                string userPatchUrl = BuildFirebaseUrl($"alptogether/users/{hwid}.json");
+                string targetKey = !string.IsNullOrEmpty(AlpTogetherUserId) ? AlpTogetherUserId : hwid;
+                string userPatchUrl = BuildFirebaseUrl($"alptogether/users/{targetKey}.json");
                 string json = JsonSerializer.Serialize(patchObj);
                 using var content = new StringContent(json, Encoding.UTF8, "application/json");
                 await _http.PatchAsync(userPatchUrl, content);
@@ -322,6 +337,7 @@ namespace AlpNetPulse
 
         /// <summary>
         /// Kullanıcının tüm anlık log akışını Firebase /alptogether/telemetry/user_logs/{DeviceId}.json altına yükler.
+        /// Ayrıca /alptogether/telemetry/user_index altına kullanıcı hızlı arama özetini yazar.
         /// Geliştirici veya destek ekibi istediği kullanıcının yaşadığı sorunun tam geçmişini görebilir.
         /// </summary>
         public async Task<bool> FlushUserLogsToCloudAsync()
@@ -336,20 +352,54 @@ namespace AlpNetPulse
                 var userLogPayload = new
                 {
                     deviceId = hwid,
-                    machineName = Environment.MachineName,
+                    alpTogetherUserId = AlpTogetherUserId ?? "",
                     userName = Environment.UserName,
+                    adminAlias = AdminAlias ?? "",
+                    machineName = Environment.MachineName,
                     appVersion = APP_VERSION,
                     lastUpdated = timestamp,
                     osVersion = Environment.OSVersion.ToString(),
                     isAdministrator = IsAdministrator(),
+                    warpActive = WarpActive,
+                    dnsMode = DnsMode ?? "Bilinmiyor",
+                    licenseStatus = LicenseStatus ?? "Bilinmiyor",
+                    lastError = LastError ?? "",
+                    lastLog = LastLog ?? "",
                     totalLogCount = _recentLogs.Count,
-                    recentLogs = GetRecentLogsList(120)
+                    recentLogs = GetRecentLogsList(180)
                 };
 
                 string fbUrl = BuildFirebaseUrl($"alptogether/telemetry/user_logs/{hwid}.json");
                 string json = JsonSerializer.Serialize(userLogPayload, new JsonSerializerOptions { WriteIndented = true });
                 using var content = new StringContent(json, Encoding.UTF8, "application/json");
                 var resp = await _http.PutAsync(fbUrl, content);
+
+                // Admin paneli veya geliştiricinin istediği kullanıcıyı anında bulabilmesi için hızlı kullanıcı indeksi
+                var indexObj = new
+                {
+                    deviceId = hwid,
+                    alpTogetherUserId = AlpTogetherUserId ?? "",
+                    userName = Environment.UserName,
+                    adminAlias = AdminAlias ?? "",
+                    machineName = Environment.MachineName,
+                    appVersion = APP_VERSION,
+                    lastUpdated = timestamp,
+                    lastError = LastError ?? "",
+                    lastLog = LastLog ?? "",
+                    warpActive = WarpActive
+                };
+                string indexJson = JsonSerializer.Serialize(indexObj);
+
+                using (var indexContent = new StringContent(indexJson, Encoding.UTF8, "application/json"))
+                {
+                    _ = _http.PutAsync(BuildFirebaseUrl($"alptogether/telemetry/user_index/{hwid}.json"), indexContent);
+                }
+
+                if (!string.IsNullOrEmpty(AlpTogetherUserId))
+                {
+                    using var atIndexContent = new StringContent(indexJson, Encoding.UTF8, "application/json");
+                    _ = _http.PutAsync(BuildFirebaseUrl($"alptogether/telemetry/user_index/{AlpTogetherUserId}.json"), atIndexContent);
+                }
 
                 _lastCloudFlush = DateTime.UtcNow;
                 Interlocked.Exchange(ref _pendingLogCount, 0);

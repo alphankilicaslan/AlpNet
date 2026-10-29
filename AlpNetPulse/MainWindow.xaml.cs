@@ -39,6 +39,7 @@ namespace AlpNetPulse
         private static extern uint RegisterWindowMessage(string lpString);
 
         private uint _taskbarCreatedMsg = 0;
+        private uint _showAppMsg = 0;
 
         private readonly HttpClient _httpClient;
         private readonly DispatcherTimer _licenseCheckTimer;
@@ -100,7 +101,25 @@ namespace AlpNetPulse
         private string CleanVersion(string v)
         {
             if (string.IsNullOrWhiteSpace(v)) return "";
-            return v.Trim().TrimStart('v', 'V');
+            string s = v.Trim().TrimStart('v', 'V');
+            int plusIdx = s.IndexOf('+');
+            if (plusIdx >= 0) s = s.Substring(0, plusIdx);
+            return s;
+        }
+
+        public static Version NormalizeVersion(string? vStr)
+        {
+            if (string.IsNullOrWhiteSpace(vStr)) return new Version(0, 0, 0, 0);
+            string clean = vStr.Trim().TrimStart('v', 'V');
+            int plusIdx = clean.IndexOf('+');
+            if (plusIdx >= 0) clean = clean.Substring(0, plusIdx);
+
+            var parts = clean.Split('.');
+            int major = parts.Length > 0 && int.TryParse(parts[0], out int maj) ? maj : 0;
+            int minor = parts.Length > 1 && int.TryParse(parts[1], out int min) ? min : 0;
+            int build = parts.Length > 2 && int.TryParse(parts[2], out int bld) ? bld : 0;
+            int rev = parts.Length > 3 && int.TryParse(parts[3], out int r) ? r : 0;
+            return new Version(major, minor, build, rev);
         }
 
         private string CurrentVersion => CleanVersion(BASE_VERSION);
@@ -269,21 +288,19 @@ namespace AlpNetPulse
                             var state = JsonSerializer.Deserialize<AppState>(json);
                             if (state != null && !string.IsNullOrWhiteSpace(state.version) && !string.IsNullOrWhiteSpace(state.updateUrl))
                             {
-                                string remoteVerStr = CleanVersion(state.version);
-                                string currentVerStr = CleanVersion(BASE_VERSION);
+                                var remoteVer = NormalizeVersion(state.version);
+                                var currentVer = NormalizeVersion(BASE_VERSION);
 
-                                AlpNetTelemetryService.Instance.Info("GÜNCELLEME", $"Sunucu Sürümü: v{remoteVerStr}, Mevcut Sürüm: v{currentVerStr}");
+                                AlpNetTelemetryService.Instance.Info("GÜNCELLEME", $"Sunucu Sürümü: v{remoteVer}, Mevcut Sürüm: v{currentVer}");
 
-                                if (Version.TryParse(remoteVerStr, out Version? remoteVer) && Version.TryParse(currentVerStr, out Version? currentVer))
+                                if (remoteVer > currentVer && !_isUpdating)
                                 {
-                                    if (remoteVer > currentVer)
-                                    {
-                                        _remoteVersion = remoteVerStr;
-                                        _updateUrl = state.updateUrl;
-                                        AlpNetTelemetryService.Instance.Info("GÜNCELLEME", $"Yeni sürüm tespit edildi (v{remoteVerStr}). Otomatik güncelleme başlatılıyor...");
-                                        await PerformUpdateAndRestartAsync(_updateUrl, _remoteVersion);
-                                        return;
-                                    }
+                                    _versionBannerShown = true;
+                                    _remoteVersion = CleanVersion(state.version);
+                                    _updateUrl = state.updateUrl;
+                                    AlpNetTelemetryService.Instance.Info("GÜNCELLEME", $"Yeni sürüm tespit edildi (v{_remoteVersion}). Otomatik güncelleme başlatılıyor...");
+                                    await PerformUpdateAndRestartAsync(_updateUrl, _remoteVersion);
+                                    return;
                                 }
                             }
                         }
@@ -407,6 +424,7 @@ namespace AlpNetPulse
                 // Windows açılışında veya explorer.exe yeniden başladığında sistem tepsisi (System Tray)
                 // simgesinin kaybolmasını kalıcı olarak engelleyen TaskbarCreated hook'u:
                 _taskbarCreatedMsg = RegisterWindowMessage("TaskbarCreated");
+                _showAppMsg = RegisterWindowMessage("AlpNetPulse_ShowWindowMessage");
                 var hwndSource = System.Windows.Interop.HwndSource.FromHwnd(new System.Windows.Interop.WindowInteropHelper(this).Handle);
                 hwndSource?.AddHook(WndProc);
             }
@@ -415,6 +433,18 @@ namespace AlpNetPulse
 
         private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
         {
+            if (_showAppMsg != 0 && msg == _showAppMsg)
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    ShowInTaskbar = true;
+                    WindowState = WindowState.Normal;
+                    Show();
+                    Activate();
+                    Focus();
+                });
+            }
+
             if (_taskbarCreatedMsg != 0 && msg == _taskbarCreatedMsg)
             {
                 // Explorer yeniden başladı, tepsiyi anında yeniden canlandır
@@ -525,12 +555,17 @@ namespace AlpNetPulse
                                 }
 
                                 // Update Notification (Runtime)
-                                if (!string.IsNullOrWhiteSpace(state.version) && !string.IsNullOrWhiteSpace(state.updateUrl) && Version.TryParse(CleanVersion(state.version), out Version? rVer) && Version.TryParse(CleanVersion(BASE_VERSION), out Version? cVer) && rVer > cVer && !_versionBannerShown)
+                                if (!string.IsNullOrWhiteSpace(state.version) && !string.IsNullOrWhiteSpace(state.updateUrl))
                                 {
-                                    _versionBannerShown = true;
-                                    _remoteVersion = CleanVersion(state.version);
-                                    _updateUrl = state.updateUrl;
-                                    _ = PerformUpdateAndRestartAsync(_updateUrl, _remoteVersion);
+                                    var rVer = NormalizeVersion(state.version);
+                                    var cVer = NormalizeVersion(BASE_VERSION);
+                                    if (rVer > cVer && !_versionBannerShown && !_isUpdating)
+                                    {
+                                        _versionBannerShown = true;
+                                        _remoteVersion = CleanVersion(state.version);
+                                        _updateUrl = state.updateUrl;
+                                        _ = PerformUpdateAndRestartAsync(_updateUrl, _remoteVersion);
+                                    }
                                 }
                             }
                         }
@@ -567,6 +602,11 @@ namespace AlpNetPulse
 
         private void ShowInAppMessage(string msg)
         {
+            if (!Dispatcher.CheckAccess())
+            {
+                Dispatcher.Invoke(() => ShowInAppMessage(msg));
+                return;
+            }
             TxtInAppMessage.Text = msg;
             InAppMessageOverlay.Visibility = Visibility.Visible;
         }
@@ -601,9 +641,8 @@ namespace AlpNetPulse
                 string currentExePath = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName ?? "";
                 if (string.IsNullOrEmpty(currentExePath))
                 {
-                    AlpNetTelemetryService.Instance.Error("GÜNCELLEME", "Mevcut çalışan exe yolu tespit edilemedi, güncelleme iptal edildi.");
-                    ShowInAppMessage("⚠️ Çalışan uygulama konumu belirlenemedi.");
-                    return;
+                    string localDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AlpNet");
+                    currentExePath = Path.Combine(localDir, "AlpNet.Pulse.exe");
                 }
                 int currentPid = Process.GetCurrentProcess().Id;
 
@@ -664,7 +703,7 @@ namespace AlpNetPulse
                 }
 
                 var fileInfo = new System.IO.FileInfo(tempUpdateExe);
-                if (!fileInfo.Exists || fileInfo.Length < 1000000)
+                if (!fileInfo.Exists || fileInfo.Length < 10000000)
                 {
                     AlpNetTelemetryService.Instance.Error("GÜNCELLEME", $"İndirilen güncelleme dosyası geçersiz veya bozuk! Boyut: {(fileInfo.Exists ? fileInfo.Length : 0)} bayt");
                     _versionBannerShown = false;
@@ -681,21 +720,18 @@ namespace AlpNetPulse
                     var downloadedVerInfo = FileVersionInfo.GetVersionInfo(tempUpdateExe);
                     if (!string.IsNullOrEmpty(downloadedVerInfo.FileVersion))
                     {
-                        string dlVerStr = CleanVersion(downloadedVerInfo.FileVersion);
-                        string curVerStr = CleanVersion(BASE_VERSION);
-                        AlpNetTelemetryService.Instance.Info("GÜNCELLEME", $"İndirilen ikili dosya sürümü: v{dlVerStr}, Mevcut sürüm: v{curVerStr}");
+                        var dlVer = NormalizeVersion(downloadedVerInfo.FileVersion);
+                        var curVer = NormalizeVersion(BASE_VERSION);
+                        AlpNetTelemetryService.Instance.Info("GÜNCELLEME", $"İndirilen ikili dosya sürümü: v{dlVer}, Mevcut sürüm: v{curVer}");
 
-                        if (Version.TryParse(dlVerStr, out Version? dlVer) && Version.TryParse(curVerStr, out Version? curVer))
+                        if (dlVer <= curVer)
                         {
-                            if (dlVer <= curVer)
-                            {
-                                AlpNetTelemetryService.Instance.Warn("GÜNCELLEME", $"İndirilen dosya sürümü (v{dlVer}) mevcut sürümden (v{curVer}) büyük değil! Sunucu/CDN henüz yeni ikiliyi güncellememiş olabilir.");
-                                ShowInAppMessage($"⚠️ Sunucudaki güncelleme dosyası (v{dlVer}) henüz hazır değil veya CDN önbelleğinde. Lütfen biraz sonra tekrar deneyin.");
-                                _versionBannerShown = false;
-                                try { System.IO.File.Delete(tempUpdateExe); } catch { }
-                                _ = Task.Delay(5000).ContinueWith(_ => Dispatcher.Invoke(() => { InAppMessageOverlay.Visibility = Visibility.Collapsed; }));
-                                return;
-                            }
+                            AlpNetTelemetryService.Instance.Warn("GÜNCELLEME", $"İndirilen dosya sürümü (v{dlVer}) mevcut sürümden (v{curVer}) büyük değil! Sunucu/CDN henüz yeni ikiliyi güncellememiş olabilir.");
+                            ShowInAppMessage($"⚠️ Sunucudaki güncelleme dosyası (v{dlVer}) henüz hazır değil veya CDN önbelleğinde. Lütfen biraz sonra tekrar deneyin.");
+                            _versionBannerShown = false;
+                            try { System.IO.File.Delete(tempUpdateExe); } catch { }
+                            _ = Task.Delay(5000).ContinueWith(_ => Dispatcher.Invoke(() => { InAppMessageOverlay.Visibility = Visibility.Collapsed; }));
+                            return;
                         }
                     }
                 }
@@ -713,16 +749,17 @@ namespace AlpNetPulse
 
                 string batchPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"alpnet_update_{Guid.NewGuid():N}.bat");
                 string[] rawArgs = Environment.GetCommandLineArgs();
-                string passArgs = string.Join(" ", rawArgs.Skip(1).Select(a => "\"" + a + "\""));
+                string passArgs = string.Join(" ", rawArgs.Skip(1).Where(a => !a.Equals("/updated", StringComparison.OrdinalIgnoreCase)).Select(a => "\"" + a + "\""));
 
                 string batchContent = "@echo off\r\n" +
+                    "chcp 65001 >nul\r\n" +
                     "setlocal enabledelayedexpansion\r\n" +
                     "title AlpNet Pulse Guncelleyici\r\n" +
                     "set /a attempts=0\r\n" +
                     ":wait_proc\r\n" +
-                    "tasklist /fi \"PID eq " + currentPid + "\" 2>nul | find \"" + currentPid + "\" >nul\r\n" +
+                    "timeout /t 1 /nobreak >nul\r\n" +
+                    "tasklist /nh /fi \"PID eq " + currentPid + "\" 2>nul | findstr /i \"" + currentPid + "\" >nul\r\n" +
                     "if not errorlevel 1 (\r\n" +
-                    "    timeout /t 1 /nobreak >nul\r\n" +
                     "    set /a attempts+=1\r\n" +
                     "    if !attempts! lss 8 goto wait_proc\r\n" +
                     "    taskkill /f /pid " + currentPid + " >nul 2>&1\r\n" +
@@ -731,20 +768,21 @@ namespace AlpNetPulse
                     "taskkill /f /im \"AlpNet.Pulse.exe\" >nul 2>&1\r\n" +
                     "taskkill /f /im \"AlpNetPulse.exe\" >nul 2>&1\r\n" +
                     "timeout /t 1 /nobreak >nul\r\n" +
+                    "attrib -r \"" + currentExePath + "\" >nul 2>&1\r\n" +
                     "set /a retries=0\r\n" +
                     ":retry_copy\r\n" +
                     "copy /y \"" + tempUpdateExe + "\" \"" + currentExePath + "\" >nul 2>&1\r\n" +
                     "if errorlevel 1 (\r\n" +
                     "    timeout /t 1 /nobreak >nul\r\n" +
                     "    set /a retries+=1\r\n" +
-                    "    if !retries! lss 25 goto retry_copy\r\n" +
-                    "    echo Kopyalama basarisiz oldu >> \"%TEMP%\\alpnet_update_error.log\"\r\n" +
+                    "    if !retries! lss 30 goto retry_copy\r\n" +
+                    "    echo [%date% %time%] Kopyalama basarisiz oldu >> \"%TEMP%\\alpnet_update_error.log\"\r\n" +
                     "    goto launch_app\r\n" +
                     ")\r\n" +
                     "del /f /q \"" + tempUpdateExe + "\" >nul 2>&1\r\n" +
                     ":launch_app\r\n" +
                     "timeout /t 1 /nobreak >nul\r\n" +
-                    "start \"\" \"" + currentExePath + "\" " + passArgs + "\r\n" +
+                    "start \"\" \"" + currentExePath + "\" /updated " + passArgs + "\r\n" +
                     "del \"%~f0\" >nul 2>&1\r\n";
 
                 System.IO.File.WriteAllText(batchPath, batchContent, System.Text.Encoding.Default);
@@ -1647,6 +1685,11 @@ namespace AlpNetPulse
                     if (match)
                     {
                         _alpTogetherUserId = kvp.Key;
+                        AlpNetTelemetryService.Instance.AlpTogetherUserId = _alpTogetherUserId;
+                        if (user.TryGetProperty("adminAlias", out var aliasProp))
+                        {
+                            AlpNetTelemetryService.Instance.AdminAlias = aliasProp.GetString();
+                        }
                         if (user.TryGetProperty("appPermissions", out var perms) &&
                             perms.TryGetProperty("alpnet-pulse", out var pulsePerm))
                         {
@@ -1660,6 +1703,7 @@ namespace AlpNetPulse
                                 {
                                     _licenseState.ExpiresAt = "Süresiz (AlpTogether)";
                                     _licenseState.LicenseKey = "ALPTOGETHER-WHITELIST-" + _deviceId;
+                                    AlpNetTelemetryService.Instance.LicenseStatus = "Süresiz (AlpTogether)";
                                     AlpNetTelemetryService.Instance.Info("LİSANS", $"AlpTogether Whitelist eşleşti: {_alpTogetherUserId} (Süresiz Lisans)");
                                     return true;
                                 }
@@ -3832,6 +3876,7 @@ namespace AlpNetPulse
                 } catch { }
 
                 _isBypassActive = false;
+                AlpNetTelemetryService.Instance.WarpActive = false;
                 UpdateDiscordPresence();
                 BtnToggleBypass.Content = "⚡ WARP SPLIT TUNNELİ BAŞLAT";
                 BtnToggleBypass.Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0, 242, 254)); // #00F2FE
@@ -3864,6 +3909,7 @@ namespace AlpNetPulse
                 if (success)
                 {
                     _isBypassActive = true;
+                    AlpNetTelemetryService.Instance.WarpActive = true;
                     UpdateDiscordPresence();
                     BtnToggleBypass.Content = "WARP TUNNELİ DURDUR";
                     BtnToggleBypass.Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(255, 8, 68)); // #FF0844
@@ -3886,6 +3932,8 @@ namespace AlpNetPulse
                 else
                 {
                     BypassStatusVal.Text = string.IsNullOrEmpty(lastErrorMsg) ? "WARP Bağlantı Hatası!" : lastErrorMsg;
+                    AlpNetTelemetryService.Instance.Error("WARP", $"WARP Split Tünel bağlantı hatası: {lastErrorMsg}");
+                    _ = AlpNetTelemetryService.Instance.FlushUserLogsToCloudAsync();
                 }
 
                 BtnToggleBypass.IsEnabled = true;
