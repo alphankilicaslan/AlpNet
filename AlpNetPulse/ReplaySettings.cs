@@ -1,6 +1,5 @@
 using System;
 using System.IO;
-using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace AlpNetPulse
@@ -58,31 +57,12 @@ namespace AlpNetPulse
 
         public static ReplaySettings Load()
         {
-            try
-            {
-                if (File.Exists(_settingsFile))
-                {
-                    string json = File.ReadAllText(_settingsFile);
-                    var settings = JsonSerializer.Deserialize<ReplaySettings>(json);
-                    if (settings != null) return settings;
-                }
-            }
-            catch { }
-            return new ReplaySettings();
+            return SafeFileIo.LoadJson(_settingsFile, new ReplaySettings()) ?? new ReplaySettings();
         }
 
         public void Save()
         {
-            try
-            {
-                if (!Directory.Exists(_settingsDir))
-                    Directory.CreateDirectory(_settingsDir);
-
-                var options = new JsonSerializerOptions { WriteIndented = true };
-                string json = JsonSerializer.Serialize(this, options);
-                File.WriteAllText(_settingsFile, json);
-            }
-            catch { }
+            SafeFileIo.SaveJsonAtomic(_settingsFile, this);
         }
 
         /// <summary>

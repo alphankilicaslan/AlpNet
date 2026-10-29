@@ -45,6 +45,7 @@ namespace AlpNetPulse
         private readonly DispatcherTimer _statsUpdateTimer;
         private readonly DispatcherTimer _presenceTimer;
         private string _deviceId = "";
+        private string? _alpTogetherUserId;
         private LicenseState _licenseState = new LicenseState();
         private readonly string _licenseDir;
         private readonly string _licenseFile;
@@ -94,7 +95,7 @@ namespace AlpNetPulse
 
 
         // Uygulamanın KENDİ sürümü (Her Güncellemede burayı artırın)
-        private const string BASE_VERSION = "2.2.9"; // Kodun orjinal versiyonu
+        private const string BASE_VERSION = "2.3.0";
 
         private string CleanVersion(string v)
         {
@@ -117,9 +118,31 @@ namespace AlpNetPulse
             catch { }
         }
 
+        private void ApplyFeatureFlags()
+        {
+            MenuBtnWifi.Visibility = FeatureFlags.EnableWifiAnalyzer ? Visibility.Visible : Visibility.Collapsed;
+            MenuBtnReplay.Visibility = FeatureFlags.EnableGameReplay ? Visibility.Visible : Visibility.Collapsed;
+            MenuBtnVoiceTranslation.Visibility = FeatureFlags.EnableVoiceTranslation ? Visibility.Visible : Visibility.Collapsed;
+
+            if (!FeatureFlags.EnableWifiAnalyzer)
+            {
+                PageWifi.Visibility = Visibility.Collapsed;
+                StopWifiAutoScanAndRadarAnimation();
+            }
+            if (!FeatureFlags.EnableGameReplay)
+            {
+                PageReplay.Visibility = Visibility.Collapsed;
+            }
+            if (!FeatureFlags.EnableVoiceTranslation)
+            {
+                PageVoiceTranslation.Visibility = Visibility.Collapsed;
+            }
+        }
+
         public MainWindow()
         {
             InitializeComponent();
+            ApplyFeatureFlags();
             
             try
             {
@@ -233,8 +256,9 @@ namespace AlpNetPulse
         {
             try
             {
+                AlpNetTelemetryService.Instance.Info("BAŞLATMA", "Firebase appstate.json denetleniyor...");
                 string firebaseUrl = "https://alpnet-d0bc4-default-rtdb.europe-west1.firebasedatabase.app/appstate.json?auth=ExNWZwF2CkByKFILhfQ2BbTpuxYFlFAUO8quWwfc";
-                using (var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(5)))
+                using (var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(6)))
                 {
                     var response = await _httpClient.GetAsync(firebaseUrl, cts.Token);
                     if (response.IsSuccessStatusCode)
@@ -248,12 +272,15 @@ namespace AlpNetPulse
                                 string remoteVerStr = CleanVersion(state.version);
                                 string currentVerStr = CleanVersion(BASE_VERSION);
 
+                                AlpNetTelemetryService.Instance.Info("GÜNCELLEME", $"Sunucu Sürümü: v{remoteVerStr}, Mevcut Sürüm: v{currentVerStr}");
+
                                 if (Version.TryParse(remoteVerStr, out Version? remoteVer) && Version.TryParse(currentVerStr, out Version? currentVer))
                                 {
                                     if (remoteVer > currentVer)
                                     {
                                         _remoteVersion = remoteVerStr;
                                         _updateUrl = state.updateUrl;
+                                        AlpNetTelemetryService.Instance.Info("GÜNCELLEME", $"Yeni sürüm tespit edildi (v{remoteVerStr}). Otomatik güncelleme başlatılıyor...");
                                         await PerformUpdateAndRestartAsync(_updateUrl, _remoteVersion);
                                         return;
                                     }
@@ -263,7 +290,10 @@ namespace AlpNetPulse
                     }
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                AlpNetTelemetryService.Instance.Warn("GÜNCELLEME", $"Başlangıç sürüm denetimi yapılamadı: {ex.Message}");
+            }
         }
 
         private void CleanupOldFiles()
@@ -305,6 +335,8 @@ namespace AlpNetPulse
             PageLicenseHwid.Text = _deviceId;
             AlpNetTelemetryService.Instance.DeviceId = _deviceId;
             AlpNetTelemetryService.Instance.Info("SİSTEM", $"AlpNet Pulse arayüzü yüklendi. HWID: {_deviceId}");
+            _ = AlpNetTelemetryService.Instance.RecordEventAsync("APP_LAUNCHED", $"AlpNet Pulse v{BASE_VERSION} açıldı.", $"OS: {Environment.OSVersion} | HWID: {_deviceId}");
+            _ = AlpNetTelemetryService.Instance.FlushUserLogsToCloudAsync();
 
             // Load and verify license
             await LoadLicenseConfig();
@@ -561,29 +593,87 @@ namespace AlpNetPulse
 
             try
             {
-                ShowInAppMessage($"🔄 Yeni sürüm (v{remoteVersion}) bulundu! İndiriliyor ve uygulama yenileniyor, lütfen bekleyin...");
+                AlpNetTelemetryService.Instance.Info("GÜNCELLEME", $"Otomatik güncelleme döngüsü başladı. Hedef Sürüm: v{remoteVersion}, URL: {updateUrl}");
+                _ = AlpNetTelemetryService.Instance.RecordEventAsync("DOWNLOAD_STARTED", $"AlpNet Pulse v{remoteVersion} güncellemesi indiriliyor...", updateUrl);
 
-                string currentExePath = Process.GetCurrentProcess().MainModule?.FileName ?? "";
-                if (string.IsNullOrEmpty(currentExePath)) return;
+                ShowInAppMessage($"🔄 Yeni sürüm (v{remoteVersion}) bulundu! İndiriliyor, lütfen bekleyin...");
+
+                string currentExePath = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName ?? "";
+                if (string.IsNullOrEmpty(currentExePath))
+                {
+                    AlpNetTelemetryService.Instance.Error("GÜNCELLEME", "Mevcut çalışan exe yolu tespit edilemedi, güncelleme iptal edildi.");
+                    ShowInAppMessage("⚠️ Çalışan uygulama konumu belirlenemedi.");
+                    return;
+                }
+                int currentPid = Process.GetCurrentProcess().Id;
 
                 string tempUpdateExe = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"AlpNet_Update_{Guid.NewGuid():N}.exe");
 
-                using (var response = await _httpClient.GetAsync(updateUrl, System.Net.Http.HttpCompletionOption.ResponseHeadersRead))
+                // Dedicated HttpClient with 10-minute timeout to prevent 15-second aborts
+                using var downloadClient = new HttpClient(new HttpClientHandler
+                {
+                    ServerCertificateCustomValidationCallback = (_, _, _, _) => true,
+                    AutomaticDecompression = System.Net.DecompressionMethods.All
+                })
+                {
+                    Timeout = TimeSpan.FromMinutes(10)
+                };
+                downloadClient.DefaultRequestHeaders.Add("User-Agent", $"AlpNetPulse/{BASE_VERSION}");
+
+                // Bypass CDN cache
+                string noCacheUrl = updateUrl + (updateUrl.Contains("?") ? "&" : "?") + "t=" + DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                using var request = new HttpRequestMessage(HttpMethod.Get, noCacheUrl);
+                request.Headers.CacheControl = new System.Net.Http.Headers.CacheControlHeaderValue { NoCache = true, NoStore = true };
+
+                AlpNetTelemetryService.Instance.Info("GÜNCELLEME", $"İndirme isteği gönderiliyor: {noCacheUrl}");
+
+                using (var response = await downloadClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead))
                 {
                     response.EnsureSuccessStatusCode();
+                    long? totalBytes = response.Content.Headers.ContentLength;
+                    AlpNetTelemetryService.Instance.Info("GÜNCELLEME", $"Sunucu yanıt verdi: HTTP {(int)response.StatusCode}. Toplam Boyut: {totalBytes ?? -1} bayt");
+
                     using (var stream = await response.Content.ReadAsStreamAsync())
                     using (var fs = new System.IO.FileStream(tempUpdateExe, System.IO.FileMode.Create, System.IO.FileAccess.Write, System.IO.FileShare.None))
                     {
-                        await stream.CopyToAsync(fs);
+                        byte[] buffer = new byte[81920];
+                        long totalRead = 0;
+                        int bytesRead;
+                        DateTime lastReport = DateTime.UtcNow;
+                        int lastReportedPercent = -1;
+
+                        while ((bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                        {
+                            await fs.WriteAsync(buffer, 0, bytesRead);
+                            totalRead += bytesRead;
+
+                            if (totalBytes.HasValue && totalBytes.Value > 0 && (DateTime.UtcNow - lastReport).TotalMilliseconds > 250)
+                            {
+                                int percent = (int)((totalRead * 100) / totalBytes.Value);
+                                ShowInAppMessage($"🔄 Yeni sürüm indiriliyor: %{percent} ({totalRead / 1024 / 1024} MB / {totalBytes.Value / 1024 / 1024} MB)...");
+                                lastReport = DateTime.UtcNow;
+
+                                if (percent >= lastReportedPercent + 25)
+                                {
+                                    lastReportedPercent = percent;
+                                    AlpNetTelemetryService.Instance.Info("GÜNCELLEME", $"İndirme ilerlemesi: %{percent} ({totalRead / 1024 / 1024} MB / {totalBytes.Value / 1024 / 1024} MB)");
+                                }
+                            }
+                        }
                     }
                 }
 
                 var fileInfo = new System.IO.FileInfo(tempUpdateExe);
-                if (!fileInfo.Exists || fileInfo.Length < 500000)
+                if (!fileInfo.Exists || fileInfo.Length < 1000000)
                 {
+                    AlpNetTelemetryService.Instance.Error("GÜNCELLEME", $"İndirilen güncelleme dosyası geçersiz veya bozuk! Boyut: {(fileInfo.Exists ? fileInfo.Length : 0)} bayt");
                     _versionBannerShown = false;
+                    ShowInAppMessage("⚠️ İndirilen güncelleme dosyası doğrulanamadı.");
+                    _ = Task.Delay(4000).ContinueWith(_ => Dispatcher.Invoke(() => { InAppMessageOverlay.Visibility = Visibility.Collapsed; }));
                     return;
                 }
+
+                AlpNetTelemetryService.Instance.Info("GÜNCELLEME", $"Dosya indirildi ({fileInfo.Length / 1024 / 1024} MB). Sürüm doğrulaması yapılıyor...");
 
                 // Anti-Loop Koruması: İndirilen dosyanın sürümünü kontrol et
                 try
@@ -593,63 +683,107 @@ namespace AlpNetPulse
                     {
                         string dlVerStr = CleanVersion(downloadedVerInfo.FileVersion);
                         string curVerStr = CleanVersion(BASE_VERSION);
+                        AlpNetTelemetryService.Instance.Info("GÜNCELLEME", $"İndirilen ikili dosya sürümü: v{dlVerStr}, Mevcut sürüm: v{curVerStr}");
+
                         if (Version.TryParse(dlVerStr, out Version? dlVer) && Version.TryParse(curVerStr, out Version? curVer))
                         {
                             if (dlVer <= curVer)
                             {
-                                // İndirilen dosya mevcut sürümden daha yeni değilse döngüye girmemek için güncellemeyi durdur
+                                AlpNetTelemetryService.Instance.Warn("GÜNCELLEME", $"İndirilen dosya sürümü (v{dlVer}) mevcut sürümden (v{curVer}) büyük değil! Sunucu/CDN henüz yeni ikiliyi güncellememiş olabilir.");
+                                ShowInAppMessage($"⚠️ Sunucudaki güncelleme dosyası (v{dlVer}) henüz hazır değil veya CDN önbelleğinde. Lütfen biraz sonra tekrar deneyin.");
                                 _versionBannerShown = false;
                                 try { System.IO.File.Delete(tempUpdateExe); } catch { }
+                                _ = Task.Delay(5000).ContinueWith(_ => Dispatcher.Invoke(() => { InAppMessageOverlay.Visibility = Visibility.Collapsed; }));
                                 return;
                             }
                         }
                     }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    AlpNetTelemetryService.Instance.Warn("GÜNCELLEME", $"İndirilen dosya sürüm bilgisi okunamadı: {ex.Message}");
+                }
+
+                AlpNetTelemetryService.Instance.Info("GÜNCELLEME", "Doğrulama başarılı. Güncelleme betiği hazırlanıyor ve süreç kapatılıyor...");
+                _ = AlpNetTelemetryService.Instance.RecordEventAsync("UPDATE_SUCCESS", $"Güncelleme uygulanıyor: v{BASE_VERSION} -> v{remoteVersion}");
+                await AlpNetTelemetryService.Instance.FlushUserLogsToCloudAsync();
+
+                ShowInAppMessage("🔄 Güncelleme uygulanıyor, uygulama yeniden başlatılıyor...");
+                await Task.Delay(500);
 
                 string batchPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"alpnet_update_{Guid.NewGuid():N}.bat");
                 string[] rawArgs = Environment.GetCommandLineArgs();
-                string passArgs = string.Join(" ", rawArgs.Skip(1).Select(a => $"\"{a}\""));
+                string passArgs = string.Join(" ", rawArgs.Skip(1).Select(a => "\"" + a + "\""));
 
-                string batchContent = $@"@echo off
-timeout /t 2 /nobreak > nul
-:retry
-copy /y ""{tempUpdateExe}"" ""{currentExePath}""
-if errorlevel 1 (
-    timeout /t 1 /nobreak > nul
-    goto retry
-)
-del ""{tempUpdateExe}"" 2>nul
-start """" ""{currentExePath}"" {passArgs}
-del ""%~f0"" 2>nul
-";
+                string batchContent = "@echo off\r\n" +
+                    "setlocal enabledelayedexpansion\r\n" +
+                    "title AlpNet Pulse Guncelleyici\r\n" +
+                    "set /a attempts=0\r\n" +
+                    ":wait_proc\r\n" +
+                    "tasklist /fi \"PID eq " + currentPid + "\" 2>nul | find \"" + currentPid + "\" >nul\r\n" +
+                    "if not errorlevel 1 (\r\n" +
+                    "    timeout /t 1 /nobreak >nul\r\n" +
+                    "    set /a attempts+=1\r\n" +
+                    "    if !attempts! lss 8 goto wait_proc\r\n" +
+                    "    taskkill /f /pid " + currentPid + " >nul 2>&1\r\n" +
+                    ")\r\n" +
+                    "timeout /t 1 /nobreak >nul\r\n" +
+                    "taskkill /f /im \"AlpNet.Pulse.exe\" >nul 2>&1\r\n" +
+                    "taskkill /f /im \"AlpNetPulse.exe\" >nul 2>&1\r\n" +
+                    "timeout /t 1 /nobreak >nul\r\n" +
+                    "set /a retries=0\r\n" +
+                    ":retry_copy\r\n" +
+                    "copy /y \"" + tempUpdateExe + "\" \"" + currentExePath + "\" >nul 2>&1\r\n" +
+                    "if errorlevel 1 (\r\n" +
+                    "    timeout /t 1 /nobreak >nul\r\n" +
+                    "    set /a retries+=1\r\n" +
+                    "    if !retries! lss 25 goto retry_copy\r\n" +
+                    "    echo Kopyalama basarisiz oldu >> \"%TEMP%\\alpnet_update_error.log\"\r\n" +
+                    "    goto launch_app\r\n" +
+                    ")\r\n" +
+                    "del /f /q \"" + tempUpdateExe + "\" >nul 2>&1\r\n" +
+                    ":launch_app\r\n" +
+                    "timeout /t 1 /nobreak >nul\r\n" +
+                    "start \"\" \"" + currentExePath + "\" " + passArgs + "\r\n" +
+                    "del \"%~f0\" >nul 2>&1\r\n";
 
                 System.IO.File.WriteAllText(batchPath, batchContent, System.Text.Encoding.Default);
 
-                var psi = new ProcessStartInfo("cmd.exe", $"/c \"{batchPath}\"")
+                var psi = new ProcessStartInfo("cmd.exe", "/c \"" + batchPath + "\"")
                 {
                     CreateNoWindow = true,
                     UseShellExecute = false
                 };
 
+                // 1. Ağ tünelleri ve arka plan servislerini durdur
+                PerformShutdownCleanup();
+
+                // 2. Tekil örnek (SingleInstance) Mutex'ini kesin olarak serbest bırak
+                App.ReleaseSingleInstanceMutex();
+
+                // 3. Güncelleyici betiği başlat
                 Process.Start(psi);
 
                 Dispatcher.Invoke(() =>
                 {
                     System.Windows.Application.Current.Shutdown();
+                    Environment.Exit(0);
                 });
             }
             catch (Exception ex)
             {
                 _versionBannerShown = false;
-                Debug.WriteLine("Update error: " + ex.Message);
+                AlpNetTelemetryService.Instance.Error("GÜNCELLEME", $"Güncelleme başarısız oldu: {ex.Message}", ex);
+                _ = AlpNetTelemetryService.Instance.RecordEventAsync("UPDATE_FAILED", $"Güncelleme indirilemedi: {ex.Message}", ex.ToString());
                 ShowInAppMessage($"⚠️ Güncelleme indirilemedi: {ex.Message}");
+                _ = Task.Delay(5000).ContinueWith(_ => Dispatcher.Invoke(() => { InAppMessageOverlay.Visibility = Visibility.Collapsed; }));
             }
             finally
             {
                 _isUpdating = false;
             }
         }
+
 
 
         private void MaximizeButton_Click(object sender, RoutedEventArgs e)
@@ -684,6 +818,9 @@ del ""%~f0"" 2>nul
         {
             if (sender is System.Windows.Controls.Button btn)
             {
+                if (!FeatureFlags.EnableWifiAnalyzer && btn.Name == "MenuBtnWifi") return;
+                if (!FeatureFlags.EnableGameReplay && btn.Name == "MenuBtnReplay") return;
+                if (!FeatureFlags.EnableVoiceTranslation && btn.Name == "MenuBtnVoiceTranslation") return;
                 // Close LibreHardwareMonitor when leaving Game Mode page to save RAM and CPU
                 if (PageGameMode.Visibility == Visibility.Visible && btn.Name != "MenuBtnGameMode")
                 {
@@ -766,6 +903,14 @@ del ""%~f0"" 2>nul
                                 IsGpuEnabled = true
                             };
                             _computer.Open();
+                            foreach (var h in _computer.Hardware)
+                            {
+                                foreach (var sh in h.SubHardware)
+                                {
+                                    foreach (var s in sh.Sensors) s.ValuesTimeWindow = TimeSpan.Zero;
+                                }
+                                foreach (var s in h.Sensors) s.ValuesTimeWindow = TimeSpan.Zero;
+                            }
                         }
                     }
                     catch { }
@@ -1501,6 +1646,7 @@ del ""%~f0"" 2>nul
 
                     if (match)
                     {
+                        _alpTogetherUserId = kvp.Key;
                         if (user.TryGetProperty("appPermissions", out var perms) &&
                             perms.TryGetProperty("alpnet-pulse", out var pulsePerm))
                         {
@@ -1514,6 +1660,7 @@ del ""%~f0"" 2>nul
                                 {
                                     _licenseState.ExpiresAt = "Süresiz (AlpTogether)";
                                     _licenseState.LicenseKey = "ALPTOGETHER-WHITELIST-" + _deviceId;
+                                    AlpNetTelemetryService.Instance.Info("LİSANS", $"AlpTogether Whitelist eşleşti: {_alpTogetherUserId} (Süresiz Lisans)");
                                     return true;
                                 }
 
@@ -1523,6 +1670,7 @@ del ""%~f0"" 2>nul
                                     {
                                         _licenseState.ExpiresAt = expDate.ToString("dd.MM.yyyy HH:mm");
                                         _licenseState.LicenseKey = "ALPTOGETHER-WHITELIST-" + _deviceId;
+                                        AlpNetTelemetryService.Instance.Info("LİSANS", $"AlpTogether Whitelist eşleşti: {_alpTogetherUserId} (Bitiş: {expDate:dd.MM.yyyy HH:mm})");
                                         return true;
                                     }
                                 }
@@ -1999,9 +2147,9 @@ del ""%~f0"" 2>nul
                         pc_user = Environment.UserName,
                         user_name = Environment.UserName,
                         warp_active = (_warpManager != null && _warpManager.IsActive) || WarpManager.IsWireSockServiceRunning(),
-                        warp_started_at = _warpManager.WarpStartedAt?.ToString("o") ?? "",
-                        warp_stopped_at = _warpManager.WarpStoppedAt?.ToString("o") ?? "",
-                        warp_total_hours_today = Math.Round(_warpManager.WarpTotalHoursToday, 2)
+                        warp_started_at = _warpManager?.WarpStartedAt?.ToString("o") ?? "",
+                        warp_stopped_at = _warpManager?.WarpStoppedAt?.ToString("o") ?? "",
+                        warp_total_hours_today = Math.Round(_warpManager?.WarpTotalHoursToday ?? 0, 2)
                     };
 
                     string json = JsonSerializer.Serialize(data);
@@ -2021,16 +2169,17 @@ del ""%~f0"" 2>nul
                 var data = new
                 {
                     warp_active = (_warpManager != null && _warpManager.IsActive) || WarpManager.IsWireSockServiceRunning(),
-                    warp_started_at = _warpManager.WarpStartedAt?.ToString("o") ?? "",
-                    warp_stopped_at = _warpManager.WarpStoppedAt?.ToString("o") ?? "",
-                    warp_total_hours_today = Math.Round(_warpManager.WarpTotalHoursToday, 2)
+                    warp_started_at = _warpManager?.WarpStartedAt?.ToString("o") ?? "",
+                    warp_stopped_at = _warpManager?.WarpStoppedAt?.ToString("o") ?? "",
+                    warp_total_hours_today = Math.Round(_warpManager?.WarpTotalHoursToday ?? 0, 2)
                 };
                 string json = JsonSerializer.Serialize(data);
                 var content = new StringContent(json, Encoding.UTF8, "application/json");
                 await _httpClient.PatchAsync(firebaseUrl, content);
                 try
                 {
-                    string atUrl = $"https://alpnet-d0bc4-default-rtdb.europe-west1.firebasedatabase.app/alptogether/users/{_deviceId}.json?auth=ExNWZwF2CkByKFILhfQ2BbTpuxYFlFAUO8quWwfc";
+                    if (string.IsNullOrEmpty(_alpTogetherUserId)) return;
+                    string atUrl = $"https://alpnet-d0bc4-default-rtdb.europe-west1.firebasedatabase.app/alptogether/users/{_alpTogetherUserId}.json?auth=ExNWZwF2CkByKFILhfQ2BbTpuxYFlFAUO8quWwfc";
                     var atData = new
                     {
                         warpActive = (_warpManager != null && _warpManager.IsActive) || WarpManager.IsWireSockServiceRunning(),
@@ -2063,6 +2212,16 @@ del ""%~f0"" 2>nul
 
         private void CheckAndUpdateWifiVisibility()
         {
+            if (!FeatureFlags.EnableWifiAnalyzer)
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    if (MenuBtnWifi.Visibility != Visibility.Collapsed)
+                        MenuBtnWifi.Visibility = Visibility.Collapsed;
+                });
+                return;
+            }
+
             try
             {
                 // Wi-Fi donanımı var mı ve radyo/bağlantı açık mı?
@@ -3513,15 +3672,22 @@ del ""%~f0"" 2>nul
                     try { p.Kill(); } catch { }
                 }
 
-                string cmdArgs = "/c \"taskkill /F /IM goodbyedpi.exe 2>nul & sc.exe stop GoodbyeDPI 2>nul & sc.exe delete GoodbyeDPI 2>nul & sc.exe stop WinDivert 2>nul & sc.exe delete WinDivert 2>nul & sc.exe stop WinDivert14 2>nul & sc.exe delete WinDivert14 2>nul & sc.exe stop WinDivert1.4 2>nul & sc.exe delete WinDivert1.4 2>nul\"";
-                var killPsi = new ProcessStartInfo("cmd.exe", cmdArgs)
+                string[] oldServices = { "GoodbyeDPI", "WinDivert", "WinDivert14", "WinDivert1.4" };
+                foreach (var s in oldServices)
                 {
-                    WindowStyle = ProcessWindowStyle.Hidden,
-                    CreateNoWindow = true,
-                    UseShellExecute = false
-                };
-                var proc = Process.Start(killPsi);
-                proc?.WaitForExit(2000);
+                    try
+                    {
+                        using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\" + s);
+                        if (key != null)
+                        {
+                            using var scStop = Process.Start(new ProcessStartInfo("sc.exe", $"stop {s}") { CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden, UseShellExecute = false });
+                            scStop?.WaitForExit(500);
+                            using var scDel = Process.Start(new ProcessStartInfo("sc.exe", $"delete {s}") { CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden, UseShellExecute = false });
+                            scDel?.WaitForExit(500);
+                        }
+                    }
+                    catch { }
+                }
             }
             catch { }
         }
@@ -4223,6 +4389,16 @@ fallback_resolvers = ['9.9.9.9:53', '8.8.8.8:53']
 
         private async Task InitializeReplaySystemAsync()
         {
+            if (!FeatureFlags.EnableGameReplay)
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    if (MenuBtnReplay.Visibility != Visibility.Collapsed)
+                        MenuBtnReplay.Visibility = Visibility.Collapsed;
+                });
+                return;
+            }
+
             try
             {
                 // Load settings

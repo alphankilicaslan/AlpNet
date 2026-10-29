@@ -10,19 +10,36 @@ namespace AlpNetPulse
     {
         private Mutex? _mutex;
 
+        public static void ReleaseSingleInstanceMutex()
+        {
+            try
+            {
+                if (System.Windows.Application.Current is App app && app._mutex != null)
+                {
+                    AlpNetTelemetryService.Instance.Info("SİSTEM", "Tekil örnek (SingleInstance) Mutex serbest bırakılıyor...");
+                    try { app._mutex.ReleaseMutex(); } catch { }
+                    try { app._mutex.Dispose(); } catch { }
+                    app._mutex = null;
+                }
+            }
+            catch { }
+        }
+
         protected override void OnStartup(StartupEventArgs e)
         {
             try
             {
                 AlpNetTelemetryService.Instance.HookGlobalExceptions();
-                AlpNetTelemetryService.Instance.Info("BAŞLATMA", $"Uygulama açılıyor... Argümanlar: {string.Join(" ", e.Args)}");
+                AppDomain.CurrentDomain.ProcessExit += (s, ev) => SafeGlobalShutdown();
+                Microsoft.Win32.SystemEvents.SessionEnding += (s, ev) => SafeGlobalShutdown();
+                AlpNetTelemetryService.Instance.Info("BAŞLATMA", $"Uygulama açılıyor... PID: {Process.GetCurrentProcess().Id}, Argümanlar: {string.Join(" ", e.Args)}");
             }
             catch { }
 
-            string currentExe = Process.GetCurrentProcess().MainModule?.FileName ?? "";
+            string currentExe = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName ?? "";
             string exeName = Path.GetFileName(currentExe).ToLower();
             string installDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AlpNet");
-            string installExe = Path.Combine(installDir, "AlpNet.exe");
+            string installExe = Path.Combine(installDir, "AlpNet.Pulse.exe");
 
             // Check if this instance is running as the installer
             bool isInstaller = !string.Equals(Path.GetFullPath(currentExe), Path.GetFullPath(installExe), StringComparison.OrdinalIgnoreCase) && 
@@ -32,29 +49,24 @@ namespace AlpNetPulse
             {
                 try
                 {
+                    AlpNetTelemetryService.Instance.Info("KURULUM", $"Kurulum modu algılandı. Hedef: {installExe}");
 
-                    // 1. Kill any running instance of AlpNet.exe to avoid file lock
-                    foreach (var proc in Process.GetProcessesByName("AlpNet"))
+                    // 1. Kill any running instance of AlpNet / AlpNetPulse / AlpNet.Pulse to avoid file lock
+                    foreach (var name in new[] { "AlpNet", "AlpNetPulse", "AlpNet.Pulse" })
                     {
-                        try
+                        foreach (var proc in Process.GetProcessesByName(name))
                         {
-                            proc.Kill();
-                            proc.WaitForExit(2000);
+                            try
+                            {
+                                proc.Kill();
+                                proc.WaitForExit(2000);
+                            }
+                            catch { }
                         }
-                        catch { }
-                    }
-                    foreach (var proc in Process.GetProcessesByName("AlpNetPulse"))
-                    {
-                        try
-                        {
-                            proc.Kill();
-                            proc.WaitForExit(2000);
-                        }
-                        catch { }
                     }
 
                     // Give Windows some time to release file locks
-                    Thread.Sleep(500);
+                    Thread.Sleep(600);
 
                     // 2. Create installation directory
                     if (!Directory.Exists(installDir))
@@ -63,7 +75,7 @@ namespace AlpNetPulse
                     }
 
                     // 3. Copy executable
-                    int retries = 6;
+                    int retries = 8;
                     while (retries > 0)
                     {
                         try
@@ -104,18 +116,44 @@ namespace AlpNetPulse
                 }
                 catch (Exception ex)
                 {
+                    AlpNetTelemetryService.Instance.Error("KURULUM", "Kurulum hatası: " + ex.Message, ex);
                     System.Windows.MessageBox.Show("Kurulum hatası: " + ex.Message + "\nLütfen çalışan AlpNet uygulamalarını kapatıp tekrar deneyin.", "AlpNet Pulse Setup Error", MessageBoxButton.OK, MessageBoxImage.Error);
                     Shutdown(1);
                     return;
                 }
             }
 
-            // Normal startup for installed app
-            bool isNewInstance;
-            _mutex = new Mutex(true, "AlpNetPulse_SingleInstance_Mutex", out isNewInstance);
+            // Normal startup for installed app: Robust single-instance mutex with abandoned mutex recovery
+            bool isNewInstance = false;
+            try
+            {
+                _mutex = new Mutex(true, "AlpNetPulse_SingleInstance_Mutex", out isNewInstance);
+                if (!isNewInstance)
+                {
+                    AlpNetTelemetryService.Instance.Warn("BAŞLATMA", "Mutex halihazırda mevcut. Olası bir güncelleme veya önceki sürecin kapanması bekleniyor (max 6 sn)...");
+                    // Wait up to 6 seconds for previous instance (e.g. during auto-update) to terminate
+                    if (_mutex.WaitOne(TimeSpan.FromSeconds(6), false))
+                    {
+                        isNewInstance = true;
+                        AlpNetTelemetryService.Instance.Info("BAŞLATMA", "Önceki süreç kapandı, Mutex sahipliği başarıyla devralındı.");
+                    }
+                }
+            }
+            catch (AbandonedMutexException)
+            {
+                // Previous process exited abruptly or was terminated by updater/OS - we safely inherit the mutex!
+                isNewInstance = true;
+                AlpNetTelemetryService.Instance.Info("BAŞLATMA", "Terk edilmiş (abandoned) Mutex sahipliği güvenle devralındı.");
+            }
+            catch (Exception ex)
+            {
+                AlpNetTelemetryService.Instance.Error("BAŞLATMA", "Mutex oluşturulurken istisna oluştu: " + ex.Message, ex);
+                isNewInstance = true; // Fallback so app still launches
+            }
+
             if (!isNewInstance)
             {
-                // App is already running, exit this new instance
+                AlpNetTelemetryService.Instance.Warn("BAŞLATMA", "AlpNet Pulse zaten arka planda çalışıyor. Yeni başlatılan örnek sonlandırılıyor.");
                 Shutdown();
                 return;
             }
@@ -184,15 +222,46 @@ namespace AlpNetPulse
             }
         }
 
+        private static int _shutdownOnce = 0;
+        public static void SafeGlobalShutdown()
+        {
+            if (System.Threading.Interlocked.Exchange(ref _shutdownOnce, 1) != 0) return;
+
+            try
+            {
+                if (System.Windows.Application.Current?.MainWindow is MainWindow mw)
+                {
+                    mw.PerformShutdownCleanup();
+                }
+
+                string[] orphanProcs = { "ffmpeg", "wiresock-client", "wgcf", "dnscrypt-proxy", "translator" };
+                foreach (var name in orphanProcs)
+                {
+                    try
+                    {
+                        foreach (var p in Process.GetProcessesByName(name))
+                        {
+                            using (p)
+                            {
+                                try { p.Kill(true); p.WaitForExit(500); } catch { }
+                            }
+                        }
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+        }
+
         protected override void OnExit(ExitEventArgs e)
         {
             try
             {
-                _mutex?.ReleaseMutex();
-                _mutex?.Dispose();
-                _mutex = null;
+                AlpNetTelemetryService.Instance.Info("SHUTDOWN", $"OnExit çağrıldı! Kod: {e.ApplicationExitCode}");
             }
             catch { }
+            SafeGlobalShutdown();
+            ReleaseSingleInstanceMutex();
             base.OnExit(e);
         }
     }

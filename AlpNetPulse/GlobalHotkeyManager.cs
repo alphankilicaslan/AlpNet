@@ -1,174 +1,220 @@
 using System;
-using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Windows.Input;
+using System.Windows.Interop;
+using WpfApp = System.Windows.Application;
 
 namespace AlpNetPulse
 {
     /// <summary>
-    /// Manages a global low-level keyboard hook for capturing hotkeys 
-    /// even when the app is not focused (e.g., during fullscreen games).
+    /// Manages a global hotkey using the official Win32 RegisterHotKey API.
+    /// Does NOT hook the keyboard (avoids EAC/BattlEye/Vanguard keylogger false-positives).
     /// </summary>
     public class GlobalHotkeyManager : IDisposable
     {
-        #region Win32 Interop
-        private const int WH_KEYBOARD_LL = 13;
-        private const int WM_KEYDOWN = 0x0100;
+        #region Win32 API
+        private const int WM_HOTKEY = 0x0312;
+        private const int HOTKEY_ID = 9000;
 
-        private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
+        // Win32 Modifiers
+        private const uint MOD_ALT = 0x0001;
+        private const uint MOD_CONTROL = 0x0002;
+        private const uint MOD_SHIFT = 0x0004;
+        private const uint MOD_WIN = 0x0008;
+        private const uint MOD_NOREPEAT = 0x4000;
 
-        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
-
-        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        [DllImport("user32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool UnhookWindowsHookEx(IntPtr hhk);
+        private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
 
-        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
-
-        [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        private static extern IntPtr GetModuleHandle(string lpModuleName);
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct KBDLLHOOKSTRUCT
-        {
-            public uint vkCode;
-            public uint scanCode;
-            public uint flags;
-            public uint time;
-            public IntPtr dwExtraInfo;
-        }
+        [DllImport("user32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
         #endregion
 
-        [DllImport("user32.dll")]
-        private static extern short GetAsyncKeyState(int vKey);
-
-        private IntPtr _hookId = IntPtr.Zero;
-        private LowLevelKeyboardProc _hookProc; // prevent GC collection
+        private IntPtr _hWnd = IntPtr.Zero;
+        private HwndSource? _hwndSource;
+        private HwndSourceHook? _hookDelegate;
         private int _hotkeyVirtualKey;
-        private int _hotkeyModifiers;
-        private bool _disposed = false;
+        private int _hotkeyModifiers; // AlpNet convention: 1=Ctrl, 2=Shift, 4=Alt
+        private bool _isRegistered = false;
         private bool _isCapturingKey = false;
+        private bool _disposed = false;
 
-        /// <summary>
-        /// Fired when the configured hotkey is pressed.
-        /// </summary>
         public event Action? HotkeyPressed;
-
-        /// <summary>
-        /// Fired when in capture mode, returns the virtual key code, modifiers bitmask, and display string.
-        /// </summary>
         public event Action<int, int, string>? KeyCaptured;
 
-        public GlobalHotkeyManager(int virtualKeyCode, int modifiers = 0)
+        public GlobalHotkeyManager(int virtualKeyCode, int modifiers = 0, IntPtr hWnd = default)
         {
             _hotkeyVirtualKey = virtualKeyCode;
             _hotkeyModifiers = modifiers;
-            _hookProc = HookCallback;
+            _hWnd = hWnd;
+
+            InitHwndSource();
         }
 
-        /// <summary>
-        /// Starts the global keyboard hook.
-        /// </summary>
-        public void Start()
+        private void InitHwndSource()
         {
-            if (_hookId != IntPtr.Zero) return;
-
-            IntPtr hMod = IntPtr.Zero;
             try
             {
-                using var curProcess = Process.GetCurrentProcess();
-                using var curModule = curProcess.MainModule;
-                if (curModule?.ModuleName != null)
+                if (_hWnd == IntPtr.Zero && WpfApp.Current?.MainWindow != null)
                 {
-                    hMod = GetModuleHandle(curModule.ModuleName);
+                    _hWnd = new WindowInteropHelper(WpfApp.Current.MainWindow).Handle;
+                }
+
+                if (_hWnd != IntPtr.Zero && _hwndSource == null)
+                {
+                    _hwndSource = HwndSource.FromHwnd(_hWnd);
+                    if (_hwndSource != null)
+                    {
+                        _hookDelegate = WndProc;
+                        _hwndSource.AddHook(_hookDelegate);
+                    }
                 }
             }
             catch { }
-
-            _hookId = SetWindowsHookEx(WH_KEYBOARD_LL, _hookProc, hMod, 0);
         }
 
-        /// <summary>
-        /// Stops the global keyboard hook.
-        /// </summary>
+        public void Start()
+        {
+            if (_isRegistered) return;
+
+            if (_hWnd == IntPtr.Zero || _hwndSource == null)
+            {
+                InitHwndSource();
+            }
+
+            RegisterCurrentHotkey();
+        }
+
         public void Stop()
         {
-            if (_hookId != IntPtr.Zero)
+            UnregisterCurrentHotkey();
+        }
+
+        public void SetHotkey(int virtualKeyCode, int modifiers)
+        {
+            bool wasRegistered = _isRegistered;
+            UnregisterCurrentHotkey();
+
+            _hotkeyVirtualKey = virtualKeyCode;
+            _hotkeyModifiers = modifiers;
+
+            if (wasRegistered)
             {
-                UnhookWindowsHookEx(_hookId);
-                _hookId = IntPtr.Zero;
+                RegisterCurrentHotkey();
             }
         }
 
-        /// <summary>
-        /// Updates the hotkey.
-        /// </summary>
-        public void SetHotkey(int virtualKeyCode, int modifiers)
+        private void RegisterCurrentHotkey()
         {
-            _hotkeyVirtualKey = virtualKeyCode;
-            _hotkeyModifiers = modifiers;
+            if (_hotkeyVirtualKey <= 0 || _hWnd == IntPtr.Zero) return;
+
+            uint win32Mods = ConvertToWin32Modifiers(_hotkeyModifiers) | MOD_NOREPEAT;
+            _isRegistered = RegisterHotKey(_hWnd, HOTKEY_ID, win32Mods, (uint)_hotkeyVirtualKey);
+        }
+
+        private void UnregisterCurrentHotkey()
+        {
+            if (_isRegistered && _hWnd != IntPtr.Zero)
+            {
+                try
+                {
+                    UnregisterHotKey(_hWnd, HOTKEY_ID);
+                }
+                catch { }
+                _isRegistered = false;
+            }
+        }
+
+        private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+        {
+            if (msg == WM_HOTKEY && wParam.ToInt32() == HOTKEY_ID)
+            {
+                HotkeyPressed?.Invoke();
+                handled = true;
+            }
+            return IntPtr.Zero;
         }
 
         /// <summary>
-        /// Enters capture mode: the next key press will be reported via KeyCaptured 
-        /// instead of triggering HotkeyPressed.
+        /// Converts AlpNet modifier flags (1=Ctrl, 2=Shift, 4=Alt) to Win32 RegisterHotKey modifier flags.
         /// </summary>
+        private static uint ConvertToWin32Modifiers(int alpnetMods)
+        {
+            uint win32Mods = 0;
+            if ((alpnetMods & 1) != 0) win32Mods |= MOD_CONTROL;
+            if ((alpnetMods & 2) != 0) win32Mods |= MOD_SHIFT;
+            if ((alpnetMods & 4) != 0) win32Mods |= MOD_ALT;
+            return win32Mods;
+        }
+
+        /// <summary>
+        /// Converts Win32 modifier flags to AlpNet modifier flags.
+        /// </summary>
+        private static int ConvertFromWin32Modifiers(ModifierKeys keys)
+        {
+            int alpnetMods = 0;
+            if ((keys & ModifierKeys.Control) != 0) alpnetMods |= 1;
+            if ((keys & ModifierKeys.Shift) != 0) alpnetMods |= 2;
+            if ((keys & ModifierKeys.Alt) != 0) alpnetMods |= 4;
+            return alpnetMods;
+        }
+
         public void StartCapturingKey()
         {
             _isCapturingKey = true;
+            if (WpfApp.Current?.MainWindow != null)
+            {
+                WpfApp.Current.MainWindow.PreviewKeyDown -= OnWindowPreviewKeyDown;
+                WpfApp.Current.MainWindow.PreviewKeyDown += OnWindowPreviewKeyDown;
+            }
         }
 
-        /// <summary>
-        /// Cancels capture mode.
-        /// </summary>
         public void StopCapturingKey()
         {
             _isCapturingKey = false;
+            if (WpfApp.Current?.MainWindow != null)
+            {
+                WpfApp.Current.MainWindow.PreviewKeyDown -= OnWindowPreviewKeyDown;
+            }
         }
 
-        private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
+        private void OnWindowPreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
         {
-            if (nCode >= 0 && wParam == (IntPtr)WM_KEYDOWN)
+            if (!_isCapturingKey) return;
+
+            Key key = (e.Key == Key.System ? e.SystemKey : e.Key);
+
+            // Skip bare modifiers so the user can combine them (e.g., holding Ctrl before pressing F9)
+            if (key == Key.LeftCtrl || key == Key.RightCtrl ||
+                key == Key.LeftShift || key == Key.RightShift ||
+                key == Key.LeftAlt || key == Key.RightAlt ||
+                key == Key.LWin || key == Key.RWin)
             {
-                var hookStruct = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
-                int vk = (int)hookStruct.vkCode;
-
-                bool ctrl = (GetAsyncKeyState(0x11) & 0x8000) != 0;
-                bool shift = (GetAsyncKeyState(0x10) & 0x8000) != 0;
-                bool alt = (GetAsyncKeyState(0x12) & 0x8000) != 0;
-                
-                int mods = (ctrl ? 1 : 0) | (shift ? 2 : 0) | (alt ? 4 : 0);
-
-                if (_isCapturingKey)
-                {
-                    // Ignore if only a modifier key was pressed
-                    if (vk == 0x10 || vk == 0x11 || vk == 0x12 || vk == 0xA0 || vk == 0xA1 || vk == 0xA2 || vk == 0xA3 || vk == 0xA4 || vk == 0xA5)
-                        return CallNextHookEx(_hookId, nCode, wParam, lParam);
-
-                    _isCapturingKey = false;
-                    string keyName = VirtualKeyToString(vk);
-                    
-                    string fullName = "";
-                    if (ctrl) fullName += "Ctrl + ";
-                    if (shift) fullName += "Shift + ";
-                    if (alt) fullName += "Alt + ";
-                    fullName += keyName;
-
-                    KeyCaptured?.Invoke(vk, mods, fullName);
-                }
-                else if (vk == _hotkeyVirtualKey && mods == _hotkeyModifiers)
-                {
-                    HotkeyPressed?.Invoke();
-                }
+                return;
             }
 
-            return CallNextHookEx(_hookId, nCode, wParam, lParam);
+            StopCapturingKey();
+            e.Handled = true;
+
+            int vk = KeyInterop.VirtualKeyFromKey(key);
+            int mods = ConvertFromWin32Modifiers(Keyboard.Modifiers);
+
+            bool ctrl = (mods & 1) != 0;
+            bool shift = (mods & 2) != 0;
+            bool alt = (mods & 4) != 0;
+
+            string keyName = VirtualKeyToString(vk);
+            string fullName = "";
+            if (ctrl) fullName += "Ctrl + ";
+            if (shift) fullName += "Shift + ";
+            if (alt) fullName += "Alt + ";
+            fullName += keyName;
+
+            KeyCaptured?.Invoke(vk, mods, fullName);
         }
 
-        /// <summary>
-        /// Converts a virtual key code to a display-friendly string.
-        /// </summary>
         public static string VirtualKeyToString(int vk)
         {
             return vk switch
@@ -206,7 +252,19 @@ namespace AlpNetPulse
         {
             if (!_disposed)
             {
-                Stop();
+                StopCapturingKey();
+                UnregisterCurrentHotkey();
+
+                if (_hwndSource != null && _hookDelegate != null)
+                {
+                    try
+                    {
+                        _hwndSource.RemoveHook(_hookDelegate);
+                    }
+                    catch { }
+                    _hwndSource = null;
+                }
+
                 _disposed = true;
             }
             GC.SuppressFinalize(this);

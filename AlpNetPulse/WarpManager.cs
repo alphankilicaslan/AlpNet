@@ -70,7 +70,7 @@ namespace AlpNetPulse
             {
                 Timeout = TimeSpan.FromSeconds(15)
             };
-            _http.DefaultRequestHeaders.Add("User-Agent", "AlpNetPulse/2.2.9");
+            _http.DefaultRequestHeaders.Add("User-Agent", "AlpNetPulse/2.3.0");
 
             LoadUsageToday();
         }
@@ -81,8 +81,7 @@ namespace AlpNetPulse
 @"[Interface]
 PrivateKey = ID6Va+b6e5vusYdSh8PkhB+Z8gOVPZFtq2/fni+1K1Q=
 Address = 172.16.0.2/32, 2606:4700:110:8369:e40f:6f09:1250:1c64/128
-DNS = 1.1.1.1, 1.0.0.1
-MTU = 1360
+MTU = 1280
 
 [Peer]
 PublicKey = bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
@@ -253,6 +252,7 @@ PersistentKeepalive = 15
                 WarpStartedAt = DateTime.UtcNow;
                 LoadUsageToday();
                 StartWatchdog(logCallback);
+                _ = AlpNetTelemetryService.Instance.RecordEventAsync("WARP_CONNECTED", "WARP Split Tüneli başarıyla aktifleştirildi.", $"Port: {CurrentPort}");
                 return true;
             }
             catch (Exception ex)
@@ -273,6 +273,7 @@ PersistentKeepalive = 15
             try
             {
                 AlpNetTelemetryService.Instance.Log("WARP", "WARP Split Tüneli durduruluyor...");
+                _ = AlpNetTelemetryService.Instance.RecordEventAsync("WARP_DISCONNECTED", "WARP Split Tüneli durduruldu.");
                 StopWatchdog();
                 WarpStoppedAt = DateTime.UtcNow;
                 if (WarpStartedAt.HasValue)
@@ -282,10 +283,10 @@ PersistentKeepalive = 15
                 }
 
                 // Hızlı durdurma (Uninstall yapmadan servisi durdurur, böylece sonraki açılış 150ms olur)
-                Task.Run(async () =>
+                _ = Task.Run(async () =>
                 {
                     await ExecuteCommandAsync("net", "stop wiresock-client-service");
-                }).Wait(2000);
+                });
 
                 // DNS sıfırla (IPv4 + IPv6)
                 Task.Run(() =>
@@ -459,15 +460,12 @@ PersistentKeepalive = 15
                     "discordptb", "DiscordPTB.exe",
                     "discordcanary", "DiscordCanary.exe",
                     "discorddevelopment", "DiscordDevelopment.exe",
-                    "update", "Update.exe",
-                    "squirrel", "Squirrel.exe",
                     // Popüler Discord Alternatif/Gelişmiş İstemcileri (Vesktop, WebCord vb.)
                     "vesktop", "Vesktop.exe",
                     "webcord", "WebCord.exe", "webcord.exe",
                     "armcord", "ArmCord.exe", "armcord.exe",
                     "legcord", "Legcord.exe", "legcord.exe",
                     "ripcord", "Ripcord.exe", "ripcord.exe",
-                    "electron", "electron.exe",
                     // Roblox
                     "roblox", "RobloxPlayerBeta.exe", "RobloxPlayerInstaller.exe",
                     "RobloxStudioBeta.exe", "RobloxStudioInstaller.exe", "RobloxCrashHandler.exe",
@@ -498,6 +496,16 @@ PersistentKeepalive = 15
                 }
 
                 var allowedAppsLine = $"AllowedApps = {string.Join(", ", allowedApps.Distinct(StringComparer.OrdinalIgnoreCase))}";
+                var disallowedApps = new List<string>
+                {
+                    "RustClient", "RustClient.exe",
+                    "EasyAntiCheat", "EasyAntiCheat.exe",
+                    "EasyAntiCheat_EOS", "EasyAntiCheat_EOS.exe",
+                    "Steam", "Steam.exe",
+                    "steamwebhelper", "steamwebhelper.exe"
+                };
+                var disallowedAppsLine = $"DisallowedApps = {string.Join(", ", disallowedApps.Distinct(StringComparer.OrdinalIgnoreCase))}";
+                var disallowedIPsLine = "DisallowedIPs = 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16";
 
                 var lines = (await File.ReadAllLinesAsync(profilePath)).ToList();
 
@@ -535,42 +543,32 @@ PersistentKeepalive = 15
                 bool keepaliveAdded = false;
                 bool allowedAppsAdded = false;
                 bool mtuAdded = false;
-                bool dnsAdded = false;
 
                 foreach (var line in lines)
                 {
                     string trimmed = line.Trim();
 
-                    // Mükerrer / eski AllowedApps, DisallowedApps, AllowedDomains ve PersistentKeepalive satırlarını atla
+                    // Mükerrer / eski AllowedApps, DisallowedApps, AllowedDomains, PersistentKeepalive ve DNS satırlarını atla
+                    // ÖNEMLİ: DNS satırı profilden tamamen temizlenir. Böylece WireSock yalnızca AllowedApps içindeki Discord/Roblox'u tüneller;
+                    // Rust, Steam, Easy Anti-Cheat ve diğer oyunların sistem DNS sorgularına ASLA dokunmaz!
                     if (trimmed.StartsWith("AllowedApps", StringComparison.OrdinalIgnoreCase) ||
                         trimmed.StartsWith("DisallowedApps", StringComparison.OrdinalIgnoreCase) ||
                         trimmed.StartsWith("AllowedDomains", StringComparison.OrdinalIgnoreCase) ||
                         trimmed.StartsWith("DisallowedDomains", StringComparison.OrdinalIgnoreCase) ||
-                        trimmed.StartsWith("PersistentKeepalive", StringComparison.OrdinalIgnoreCase))
+                        trimmed.StartsWith("PersistentKeepalive", StringComparison.OrdinalIgnoreCase) ||
+                        trimmed.StartsWith("DisallowedIPs", StringComparison.OrdinalIgnoreCase) ||
+                        trimmed.StartsWith("DNS", StringComparison.OrdinalIgnoreCase))
                     {
-                        continue;
-                    }
-
-                    if (trimmed.StartsWith("DNS", StringComparison.OrdinalIgnoreCase))
-                    {
-                        // Şifreli Cloudflare DNS: ISS DNS zehirlenmesini ve engellemelerini %100 önler
-                        newLines.Add("DNS = 1.1.1.1, 1.0.0.1");
-                        dnsAdded = true;
                         continue;
                     }
 
                     if (trimmed.StartsWith("[Peer]", StringComparison.OrdinalIgnoreCase))
                     {
-                        if (!dnsAdded)
-                        {
-                            newLines.Add("DNS = 1.1.1.1, 1.0.0.1");
-                            dnsAdded = true;
-                        }
-
-                        // [Interface] bitmeden MTU eklenmediyse araya enjekte et
+                        newLines.Add("DNS = 1.1.1.1, 1.0.0.1");
+                        // [Interface] bitmeden MTU eklenmediyse araya enjekte et (1280 IPv6 Safe MTU)
                         if (!mtuAdded)
                         {
-                            newLines.Add("MTU = 1360");
+                            newLines.Add("MTU = 1280");
                             mtuAdded = true;
                         }
 
@@ -581,7 +579,7 @@ PersistentKeepalive = 15
 
                     if (trimmed.StartsWith("MTU", StringComparison.OrdinalIgnoreCase))
                     {
-                        newLines.Add("MTU = 1360");
+                        newLines.Add("MTU = 1280");
                         mtuAdded = true;
                         continue;
                     }
@@ -601,6 +599,7 @@ PersistentKeepalive = 15
                             newLines.Add(endpointLine);
                             newLines.Add("PersistentKeepalive = 15");
                             newLines.Add(allowedAppsLine);
+                                                        newLines.Add(disallowedIPsLine);
                             keepaliveAdded = true;
                             allowedAppsAdded = true;
                             continue;
@@ -614,7 +613,11 @@ PersistentKeepalive = 15
                 if (inPeerSection)
                 {
                     if (!keepaliveAdded) newLines.Add("PersistentKeepalive = 15");
-                    if (!allowedAppsAdded) newLines.Add(allowedAppsLine);
+                    if (!allowedAppsAdded)
+                    {
+                        newLines.Add(allowedAppsLine);
+                                                newLines.Add(disallowedIPsLine);
+                    }
                 }
 
                 string oldContent = string.Join("\n", lines.Select(l => l.Trim()));
@@ -740,8 +743,7 @@ PersistentKeepalive = 15
                     AlpNetTelemetryService.Instance.Warn("DNS", "ISS DNS Zehirlenmesi (195.175.x.x) algılandı! DNS önbelleği zorla temizleniyor...");
                     try
                     {
-                        using var p = Process.Start(new ProcessStartInfo("cmd.exe", "/c ipconfig /flushdns") { WindowStyle = ProcessWindowStyle.Hidden, CreateNoWindow = true });
-                        p?.WaitForExit(2000);
+                        using var p = Process.Start(new ProcessStartInfo("ipconfig.exe", "/flushdns") { WindowStyle = ProcessWindowStyle.Hidden, CreateNoWindow = true, UseShellExecute = false });
                     }
                     catch { }
                 }
@@ -927,6 +929,7 @@ PersistentKeepalive = 15
                     p1?.WaitForExit(2000);
 
                     // 2) PowerShell ile TÜM aktif bağdaştırıcıları ayarla: IPv4 DNS Cloudflare, IPv6 DNS sıfırla (timeout engelle)
+                    // DoH AutoUpgrade devre dışı bırakılır (AutoUpgrade=$false); böylece oyunlar (Rust, Steam) ve Easy Anti-Cheat standart UDP port 53 üzerinden engelsiz ve 0 gecikmeyle çalışır.
                     string psCmd = 
                         "$adapters = Get-NetAdapter | Where-Object Status -eq 'Up'; " +
                         "$adapters | ForEach-Object { " +
@@ -934,8 +937,8 @@ PersistentKeepalive = 15
                         "  Set-DnsClientServerAddress -InterfaceIndex $_.InterfaceIndex -Family IPv6 -ResetServerAddresses -ErrorAction SilentlyContinue " +
                         "}; " +
                         "if (Get-Command Set-DnsClientDohServerAddress -ErrorAction SilentlyContinue) { " +
-                        "  Set-DnsClientDohServerAddress -ServerAddress '1.1.1.1' -DohTemplate 'https://cloudflare-dns.com/dns-query' -AllowFallbackToUdp $true -AutoUpgrade $true -ErrorAction SilentlyContinue; " +
-                        "  Set-DnsClientDohServerAddress -ServerAddress '1.0.0.1' -DohTemplate 'https://cloudflare-dns.com/dns-query' -AllowFallbackToUdp $true -AutoUpgrade $true -ErrorAction SilentlyContinue; " +
+                        "  Set-DnsClientDohServerAddress -ServerAddress '1.1.1.1' -AutoUpgrade $false -ErrorAction SilentlyContinue; " +
+                        "  Set-DnsClientDohServerAddress -ServerAddress '1.0.0.1' -AutoUpgrade $false -ErrorAction SilentlyContinue; " +
                         "}; " +
                         "Clear-DnsClientCache; ipconfig /flushdns";
 
@@ -1032,7 +1035,7 @@ PersistentKeepalive = 15
                     // 2) Kalan kilitli alt süreçleri zorla sonlandır (Update.exe kaldırıldı)
                     try
                     {
-                        var killPsi = new ProcessStartInfo("cmd.exe", "/c taskkill /F /T /IM Discord.exe /IM DiscordPTB.exe /IM DiscordCanary.exe /IM DiscordDevelopment.exe /IM Vesktop.exe /IM webcord.exe /IM ArmCord.exe 2>nul")
+                        var killPsi = new ProcessStartInfo("taskkill.exe", "/F /T /IM Discord.exe /IM DiscordPTB.exe /IM DiscordCanary.exe /IM DiscordDevelopment.exe /IM Vesktop.exe /IM webcord.exe /IM ArmCord.exe")
                         {
                             WindowStyle = ProcessWindowStyle.Hidden,
                             CreateNoWindow = true,
@@ -1149,11 +1152,29 @@ PersistentKeepalive = 15
                     }
                     catch { }
 
-                    // 4) DNS ve ARP önbelleğini temizle, Cloudflare DNS tazele
+                    // 4) WARP tüneli aktifse WireSock servisini ve soket kancalarını sıfırla (Kapa-Aç)
                     try
                     {
-                        using var p = Process.Start(new ProcessStartInfo("cmd.exe", "/c ipconfig /flushdns & arp -d * 2>nul") { WindowStyle = ProcessWindowStyle.Hidden, CreateNoWindow = true });
-                        p?.WaitForExit(2000);
+                        if (IsWireSockServiceRunning())
+                        {
+                            logCallback?.Invoke("WARP tüneli ve ağ soketleri sıfırlanıyor (Kapa-Aç)...");
+                            var dummyWarp = new WarpManager();
+                            await dummyWarp.ExecuteCommandAsync("net", "stop wiresock-client-service");
+                            await Task.Delay(250);
+                            int startRes = await dummyWarp.ExecuteCommandAsync("net", "start wiresock-client-service");
+                            if (startRes != 0)
+                            {
+                                await dummyWarp.ExecuteCommandAsync("sc", "start wiresock-client-service");
+                            }
+                        }
+                    }
+                    catch { }
+
+                    // 5) DNS ve ARP önbelleğini temizle, Cloudflare DNS tazele
+                    try
+                    {
+                        using var p1 = Process.Start(new ProcessStartInfo("ipconfig.exe", "/flushdns") { WindowStyle = ProcessWindowStyle.Hidden, CreateNoWindow = true, UseShellExecute = false }); p1?.WaitForExit(1000); using var p2 = Process.Start(new ProcessStartInfo("arp.exe", "-d *") { WindowStyle = ProcessWindowStyle.Hidden, CreateNoWindow = true, UseShellExecute = false }); p2?.WaitForExit(1000);
+
                     } catch { }
 
                     _ = Task.Run(async () =>
@@ -1194,10 +1215,12 @@ PersistentKeepalive = 15
                     };
                     using var proc = new Process { StartInfo = si };
                     proc.Start();
-                    var outTask = proc.StandardOutput.ReadToEndAsync();
-                    var errTask = proc.StandardError.ReadToEndAsync();
-                    await Task.WhenAll(outTask, errTask);
-                    proc.WaitForExit(15000);
+                    using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(15));
+                    ChildProcessTracker.AddProcess(proc);
+                    var outTask = proc.StandardOutput.ReadToEndAsync(cts.Token);
+                    var errTask = proc.StandardError.ReadToEndAsync(cts.Token);
+                    var exitTask = proc.WaitForExitAsync(cts.Token);
+                    await Task.WhenAll(outTask, errTask, exitTask);
                     return proc.ExitCode;
                 }
                 catch { return -1; }
@@ -1220,16 +1243,24 @@ PersistentKeepalive = 15
                     }
                 }
 
-                // Çakışan WinDivert ve GoodbyeDPI servislerini durdur/kaldır
-                string cmdArgs = "/c \"sc.exe stop WinDivert 2>nul & sc.exe delete WinDivert 2>nul & sc.exe stop WinDivert14 2>nul & sc.exe delete WinDivert14 2>nul & sc.exe stop WinDivert1.4 2>nul & sc.exe delete WinDivert1.4 2>nul & sc.exe stop GoodbyeDPI 2>nul & sc.exe delete GoodbyeDPI 2>nul\"";
-                var psi = new ProcessStartInfo("cmd.exe", cmdArgs)
+
+                // Çakışan WinDivert ve GoodbyeDPI servislerini sessiz ve güvenli kaldır (Defender uyarısını önler)
+                string[] services = { "WinDivert", "WinDivert14", "WinDivert1.4", "GoodbyeDPI" };
+                foreach (var s in services)
                 {
-                    WindowStyle = ProcessWindowStyle.Hidden,
-                    CreateNoWindow = true,
-                    UseShellExecute = false
-                };
-                using var p2 = Process.Start(psi);
-                p2?.WaitForExit(1000);
+                    try
+                    {
+                        using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\" + s);
+                        if (key != null)
+                        {
+                            using var scStop = Process.Start(new ProcessStartInfo("sc.exe", $"stop {s}") { CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden, UseShellExecute = false });
+                            scStop?.WaitForExit(500);
+                            using var scDel = Process.Start(new ProcessStartInfo("sc.exe", $"delete {s}") { CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden, UseShellExecute = false });
+                            scDel?.WaitForExit(500);
+                        }
+                    }
+                    catch { }
+                }
 
                 // Easy Anti-Cheat ve BattlEye için temp klasörlerindeki eski sürücü/dosya kalıntılarını temizle
                 try

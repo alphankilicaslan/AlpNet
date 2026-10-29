@@ -10,6 +10,7 @@ using System.Net.Sockets;
 using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Win32;
 
@@ -17,7 +18,7 @@ namespace AlpNetPulse
 {
     /// <summary>
     /// AlpTogether ekosistemi ile 100% uyumlu AlpNet Pulse telemetri ve hata/teşhis log servisi.
-    /// AlpTogether Admin paneline (Telemetri, Olaylar, Arıza Kayıtları) anında düşer.
+    /// AlpTogether Admin paneline (Telemetri, Olaylar, Arıza Kayıtları ve Kullanıcı Özel Logları) anında düşer.
     /// </summary>
     public class AlpNetTelemetryService
     {
@@ -27,7 +28,7 @@ namespace AlpNetPulse
         private const string FIREBASE_AUTH_SECRET = "ExNWZwF2CkByKFILhfQ2BbTpuxYFlFAUO8quWwfc";
         public const string APP_ID = "alpnet-pulse";
         public const string APP_NAME = "AlpNet Pulse";
-        public const string APP_VERSION = "2.2.9";
+        public const string APP_VERSION = "2.3.0";
 
         private readonly HttpClient _http;
         private readonly string _logsDir;
@@ -36,8 +37,12 @@ namespace AlpNetPulse
         private readonly string _mainLogFile;
 
         private readonly ConcurrentQueue<string> _recentLogs = new();
-        private const int MAX_LOG_BUFFER = 250;
+        private const int MAX_LOG_BUFFER = 500;
         private readonly object _fileLock = new();
+
+        private DateTime _lastCloudFlush = DateTime.MinValue;
+        private readonly SemaphoreSlim _cloudSyncLock = new(1, 1);
+        private int _pendingLogCount = 0;
 
         public string DeviceId { get; set; } = string.Empty;
 
@@ -49,7 +54,7 @@ namespace AlpNetPulse
             };
             _http = new HttpClient(handler)
             {
-                Timeout = TimeSpan.FromSeconds(12)
+                Timeout = TimeSpan.FromSeconds(15)
             };
             _http.DefaultRequestHeaders.Add("User-Agent", $"AlpNetPulse/{APP_VERSION}");
 
@@ -71,7 +76,10 @@ namespace AlpNetPulse
             // İlk HWID belirleme
             EnsureDeviceId();
 
-            Log("BAŞLATMA", $"AlpNet Pulse v{APP_VERSION} Telemetri Servisi başlatıldı. Cihaz: {DeviceId} ({Environment.MachineName})");
+            Log("BAŞLATMA", $"AlpNet Pulse v{APP_VERSION} Telemetri ve Log Servisi başlatıldı. Cihaz: {DeviceId} ({Environment.MachineName})");
+
+            // Arka planda periyodik log senkronizasyon zamanlayıcısı (Her 3 dakikada bir birikmiş logları buluta gönderir)
+            _ = StartPeriodicCloudFlushLoop();
         }
 
         public string EnsureDeviceId()
@@ -123,11 +131,12 @@ namespace AlpNetPulse
 
         #region In-Memory & File Logging
         /// <summary>
-        /// AlpNet içinde gerçekleşen tüm olayları, WARP hareketlerini ve durumları kaydeder.
+        /// AlpNet içinde gerçekleşen tüm olayları, WARP hareketlerini, DNS ve ağ durumlarını kaydeder.
         /// </summary>
         public void Log(string category, string message, string level = "INFO")
         {
-            string line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [{level}] [{category}] {message}";
+            string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");
+            string line = $"[{timestamp}] [{level,-5}] [{category}] {message}";
 
             _recentLogs.Enqueue(line);
             while (_recentLogs.Count > MAX_LOG_BUFFER)
@@ -135,27 +144,67 @@ namespace AlpNetPulse
                 _recentLogs.TryDequeue(out _);
             }
 
+            Interlocked.Increment(ref _pendingLogCount);
             Debug.WriteLine(line);
 
-            // Yerel dosyaya yaz
+            // Yerel dosyalara güvenli yazma (ana log + günlük arşiv)
             try
             {
                 lock (_fileLock)
                 {
+                    RotateLogFileIfNeeded(_mainLogFile);
                     File.AppendAllText(_mainLogFile, line + Environment.NewLine, Encoding.UTF8);
+
+                    string dailyFile = Path.Combine(_logsDir, $"alpnet_pulse_{DateTime.Now:yyyyMMdd}.log");
+                    File.AppendAllText(dailyFile, line + Environment.NewLine, Encoding.UTF8);
+                }
+            }
+            catch { }
+
+            // Hata veya Uyarı durumunda anında uzaktan telemetri güncellemesi
+            if (level == "ERROR" || level == "FATAL")
+            {
+                _ = TriggerRealtimeAlertAsync(category, message, level);
+            }
+        }
+
+        private static void RotateLogFileIfNeeded(string filePath)
+        {
+            try
+            {
+                var fi = new FileInfo(filePath);
+                if (fi.Exists && fi.Length > 10 * 1024 * 1024) // 10 MB limit
+                {
+                    string oldFile = filePath + ".old";
+                    if (File.Exists(oldFile)) File.Delete(oldFile);
+                    File.Move(filePath, oldFile);
                 }
             }
             catch { }
         }
 
+        public void DebugLog(string category, string message) => Log(category, message, "DEBUG");
         public void Info(string category, string message) => Log(category, message, "INFO");
         public void Warn(string category, string message) => Log(category, message, "WARN");
-        public void Error(string category, string message) => Log(category, message, "ERROR");
+        public void Error(string category, string message, Exception? ex = null)
+        {
+            string fullMsg = ex != null ? $"{message} | Hata: {ex.Message}" : message;
+            Log(category, fullMsg, "ERROR");
+            if (ex != null)
+            {
+                _ = ReportErrorImmediatelyAsync(category, message, ex.ToString());
+            }
+        }
         public void Success(string category, string message) => Log(category, message, "SUCCESS");
 
-        public string GetRecentLogsText(int count = 60)
+        public string GetRecentLogsText(int count = 100)
         {
             return string.Join(Environment.NewLine, _recentLogs.TakeLast(count));
+        }
+
+        public List<string> GetRecentLogsList(int count = 100)
+        {
+            return _recentLogs.TakeLast(count).ToList();
         }
 
         public string GetLogsDirectory() => _logsDir;
@@ -166,6 +215,170 @@ namespace AlpNetPulse
         {
             string clean = relativePath.TrimStart('/');
             return $"{FIREBASE_BASE_URL}/{clean}?auth={Uri.EscapeDataString(FIREBASE_AUTH_SECRET)}";
+        }
+        #endregion
+
+        #region Remote Telemetry & Event Stream
+        /// <summary>
+        /// AlpTogether Canlı Olay Akışına (Events) anlık olay bildirir.
+        /// </summary>
+        public async Task<bool> RecordEventAsync(string eventType, string details, string extraInfo = "")
+        {
+            try
+            {
+                string hwid = EnsureDeviceId();
+                string eventId = "EVT-" + DateTime.Now.ToString("MMddHHmmss") + "-" + Guid.NewGuid().ToString("N")[..4].ToUpperInvariant();
+                string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+
+                string badge = eventType switch
+                {
+                    "DOWNLOAD_STARTED" => "⬇ İNDİRME",
+                    "INSTALL_SUCCESS" => "✔ KURULUM",
+                    "APP_LAUNCHED" => "▶ BAŞLATMA",
+                    "APP_STOPPED" => "⏹ DURDURMA",
+                    "CLIENT_STARTED" => "⚡ İSTEMCİ",
+                    "UPDATE_CHECK" => "🔄 GÜNCELLEME",
+                    "UPDATE_SUCCESS" => "🎉 GÜNCELLENDİ",
+                    "UPDATE_FAILED" => "⚠️ GÜNCELLEME HATASI",
+                    "WARP_CONNECTED" => "🛡️ WARP AKTİF",
+                    "WARP_DISCONNECTED" => "⏹ WARP KAPALI",
+                    "WARP_ERROR" => "🚨 WARP HATA",
+                    "DNS_WARNING" => "⚠️ DNS UYARI",
+                    "ERROR" => "🚨 HATA",
+                    _ => eventType
+                };
+
+                string colorHex = eventType switch
+                {
+                    "INSTALL_SUCCESS" or "UPDATE_SUCCESS" or "WARP_CONNECTED" => "#00E676", // Yeşil
+                    "DOWNLOAD_STARTED" or "UPDATE_CHECK" => "#00E5FF",                     // Camgöbeği
+                    "APP_LAUNCHED" or "CLIENT_STARTED" => "#FF5CAA",                        // Pembe
+                    "APP_STOPPED" or "WARP_DISCONNECTED" => "#FFAB00",                     // Kehribar
+                    "ERROR" or "UPDATE_FAILED" or "WARP_ERROR" => "#FF1744",               // Kırmızı
+                    _ => "#80D8FF"
+                };
+
+                var evt = new
+                {
+                    EventId = eventId,
+                    Timestamp = timestamp,
+                    DeviceId = hwid,
+                    MachineName = Environment.MachineName,
+                    UserName = Environment.UserName,
+                    EventType = eventType,
+                    EventBadgeText = badge,
+                    EventColorHex = colorHex,
+                    AppId = APP_ID,
+                    AppName = APP_NAME,
+                    AppVersion = APP_VERSION,
+                    Details = details,
+                    ExtraInfo = extraInfo
+                };
+
+                string fbEvtUrl = BuildFirebaseUrl($"alptogether/telemetry/events/{eventId}.json");
+                string evtPayload = JsonSerializer.Serialize(evt);
+                using var evtContent = new StringContent(evtPayload, Encoding.UTF8, "application/json");
+                var resp = await _http.PutAsync(fbEvtUrl, evtContent);
+                return resp.IsSuccessStatusCode;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private async Task TriggerRealtimeAlertAsync(string category, string message, string level)
+        {
+            try
+            {
+                string hwid = EnsureDeviceId();
+                string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+
+                // 1. Canlı Olay Kaydı
+                _ = RecordEventAsync(level == "ERROR" ? "ERROR" : "DNS_WARNING", $"[{category}] {message}");
+
+                // 2. Kullanıcı tablosuna son log & son hata özetini yaz
+                var patchObj = new
+                {
+                    last_seen = DateTime.UtcNow.ToString("o"),
+                    last_log = $"[{timestamp}] [{level}] [{category}] {message}",
+                    last_error = level == "ERROR" ? $"[{timestamp}] [{category}] {message}" : "",
+                    version = APP_VERSION,
+                    clientVersion = APP_VERSION
+                };
+
+                string userPatchUrl = BuildFirebaseUrl($"alptogether/users/{hwid}.json");
+                string json = JsonSerializer.Serialize(patchObj);
+                using var content = new StringContent(json, Encoding.UTF8, "application/json");
+                await _http.PatchAsync(userPatchUrl, content);
+
+                // Legacy node güncellemesi
+                string legacyPatchUrl = BuildFirebaseUrl($"users/{hwid}.json");
+                using var legacyContent = new StringContent(json, Encoding.UTF8, "application/json");
+                await _http.PatchAsync(legacyPatchUrl, legacyContent);
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// Kullanıcının tüm anlık log akışını Firebase /alptogether/telemetry/user_logs/{DeviceId}.json altına yükler.
+        /// Geliştirici veya destek ekibi istediği kullanıcının yaşadığı sorunun tam geçmişini görebilir.
+        /// </summary>
+        public async Task<bool> FlushUserLogsToCloudAsync()
+        {
+            if (!await _cloudSyncLock.WaitAsync(100)) return false;
+
+            try
+            {
+                string hwid = EnsureDeviceId();
+                string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+
+                var userLogPayload = new
+                {
+                    deviceId = hwid,
+                    machineName = Environment.MachineName,
+                    userName = Environment.UserName,
+                    appVersion = APP_VERSION,
+                    lastUpdated = timestamp,
+                    osVersion = Environment.OSVersion.ToString(),
+                    isAdministrator = IsAdministrator(),
+                    totalLogCount = _recentLogs.Count,
+                    recentLogs = GetRecentLogsList(120)
+                };
+
+                string fbUrl = BuildFirebaseUrl($"alptogether/telemetry/user_logs/{hwid}.json");
+                string json = JsonSerializer.Serialize(userLogPayload, new JsonSerializerOptions { WriteIndented = true });
+                using var content = new StringContent(json, Encoding.UTF8, "application/json");
+                var resp = await _http.PutAsync(fbUrl, content);
+
+                _lastCloudFlush = DateTime.UtcNow;
+                Interlocked.Exchange(ref _pendingLogCount, 0);
+                return resp.IsSuccessStatusCode;
+            }
+            catch
+            {
+                return false;
+            }
+            finally
+            {
+                _cloudSyncLock.Release();
+            }
+        }
+
+        private async Task StartPeriodicCloudFlushLoop()
+        {
+            while (true)
+            {
+                await Task.Delay(TimeSpan.FromMinutes(2.5));
+                try
+                {
+                    if (_pendingLogCount > 0 || (DateTime.UtcNow - _lastCloudFlush).TotalMinutes >= 5)
+                    {
+                        await FlushUserLogsToCloudAsync();
+                    }
+                }
+                catch { }
+            }
         }
         #endregion
 
@@ -196,10 +409,10 @@ namespace AlpNetPulse
                 ErrorSource = errorSource,
                 ErrorMessage = errorMessage,
                 StackTrace = stackTrace,
-                RecentLogs = GetRecentLogsText(40)
+                RecentLogs = GetRecentLogsText(60)
             };
 
-            Log("HATA", $"Kritik hata raporu hazırlandı ({reportId}): {errorMessage}", "ERROR");
+            Log("HATA", $"Kritik hata raporu oluşturuldu ({reportId}): {errorMessage}", "ERROR");
 
             // 1. Yerel olarak kaydet
             try
@@ -223,31 +436,11 @@ namespace AlpNetPulse
             }
             catch { }
 
-            // 3. Firebase /alptogether/telemetry/events/{eventId}.json
-            try
-            {
-                string eventId = "EVT-" + DateTime.Now.ToString("MMddHHmmss") + "-" + Guid.NewGuid().ToString("N")[..4].ToUpperInvariant();
-                var evt = new
-                {
-                    EventId = eventId,
-                    Timestamp = timestamp,
-                    DeviceId = hwid,
-                    MachineName = Environment.MachineName,
-                    UserName = Environment.UserName,
-                    EventType = "ERROR",
-                    AppId = APP_ID,
-                    AppName = APP_NAME,
-                    AppVersion = APP_VERSION,
-                    Details = errorMessage.Length > 200 ? errorMessage[..200] + "..." : errorMessage,
-                    ExtraInfo = $"Kaynak: {errorSource} | {stackTrace}"
-                };
+            // 3. Canlı Olay Akışına hata kaydı
+            _ = RecordEventAsync("ERROR", $"[{errorSource}] {errorMessage}", $"Hata Raporu: {reportId}\n{stackTrace}");
 
-                string fbEvtUrl = BuildFirebaseUrl($"alptogether/telemetry/events/{eventId}.json");
-                string evtPayload = JsonSerializer.Serialize(evt);
-                using var evtContent = new StringContent(evtPayload, Encoding.UTF8, "application/json");
-                await _http.PutAsync(fbEvtUrl, evtContent);
-            }
-            catch { }
+            // 4. Detaylı kullanıcı loglarını buluta hemen ilet
+            _ = FlushUserLogsToCloudAsync();
 
             return cloudSuccess;
         }
@@ -298,7 +491,7 @@ namespace AlpNetPulse
             diagBuilder.AppendLine($"• Uygulama Sürümü      : v{APP_VERSION}");
             diagBuilder.AppendLine($"• Lisans Durumu        : {licenseStatus ?? "Bilinmiyor"}");
             diagBuilder.AppendLine($"• Lisans Bitiş         : {licenseExpiry ?? "Bilinmiyor"}");
-            string exePath = Process.GetCurrentProcess().MainModule?.FileName ?? "Bilinmiyor";
+            string exePath = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName ?? "Bilinmiyor";
             diagBuilder.AppendLine($"• Çalışan Konum        : {exePath}");
             diagBuilder.AppendLine();
 
@@ -390,7 +583,7 @@ namespace AlpNetPulse
 
             // G. Son Sistem & WARP Logları
             diagBuilder.AppendLine("[SON LOGLAR (CIRCULAR BUFFER)]");
-            diagBuilder.AppendLine(GetRecentLogsText(80));
+            diagBuilder.AppendLine(GetRecentLogsText(100));
 
             string fullDiagnosticText = diagBuilder.ToString();
 
@@ -427,7 +620,7 @@ namespace AlpNetPulse
                     ErrorSource = "Kullanıcı Teşhis Logu (Lisans ve Hesap)",
                     ErrorMessage = summaryMsg,
                     StackTrace = fullDiagnosticText,
-                    RecentLogs = GetRecentLogsText(50)
+                    RecentLogs = GetRecentLogsText(80)
                 };
 
                 string fbErrorUrl = BuildFirebaseUrl($"alptogether/telemetry/errors/{reportId}.json");
@@ -449,6 +642,8 @@ namespace AlpNetPulse
                     MachineName = Environment.MachineName,
                     UserName = Environment.UserName,
                     EventType = "ERROR", // AlpTogether'da Hata filtresine düşer ve kırmızı rozet alır
+                    EventBadgeText = "🚨 TEŞHİS",
+                    EventColorHex = "#FF1744",
                     AppId = APP_ID,
                     AppName = APP_NAME,
                     AppVersion = APP_VERSION,
@@ -492,6 +687,9 @@ namespace AlpNetPulse
                 ticketSent = resp.IsSuccessStatusCode;
             }
             catch { }
+
+            // D. Tam kullanıcı log geçmişini buluta senkronize et
+            await FlushUserLogsToCloudAsync();
 
             bool anySuccess = errorSent || eventSent || ticketSent;
             if (anySuccess)
@@ -569,15 +767,13 @@ namespace AlpNetPulse
             {
                 if (e.ExceptionObject is Exception ex)
                 {
-                    Error("ÇÖKME", $"AppDomain UnhandledException: {ex.Message}\n{ex.StackTrace}");
-                    _ = ReportErrorImmediatelyAsync("AppDomain.UnhandledException", ex.Message, ex.ToString());
+                    Error("ÇÖKME", $"AppDomain UnhandledException: {ex.Message}\n{ex.StackTrace}", ex);
                 }
             };
 
             TaskScheduler.UnobservedTaskException += (s, e) =>
             {
-                Error("ÇÖKME", $"TaskScheduler UnobservedTaskException: {e.Exception.Message}\n{e.Exception.StackTrace}");
-                _ = ReportErrorImmediatelyAsync("TaskScheduler.UnobservedTaskException", e.Exception.Message, e.Exception.ToString());
+                Error("ÇÖKME", $"TaskScheduler UnobservedTaskException: {e.Exception.Message}\n{e.Exception.StackTrace}", e.Exception);
                 e.SetObserved();
             };
 
@@ -585,8 +781,7 @@ namespace AlpNetPulse
             {
                 System.Windows.Application.Current.DispatcherUnhandledException += (s, e) =>
                 {
-                    Error("ÇÖKME", $"DispatcherUnhandledException: {e.Exception.Message}\n{e.Exception.StackTrace}");
-                    _ = ReportErrorImmediatelyAsync("DispatcherUnhandledException", e.Exception.Message, e.Exception.ToString());
+                    Error("ÇÖKME", $"DispatcherUnhandledException: {e.Exception.Message}\n{e.Exception.StackTrace}", e.Exception);
                 };
             }
         }

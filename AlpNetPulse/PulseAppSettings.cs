@@ -1,6 +1,5 @@
 using System;
 using System.IO;
-using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace AlpNetPulse
@@ -46,34 +45,17 @@ namespace AlpNetPulse
         [JsonPropertyName("reverseTTSActive")]
         public bool ReverseTTSActive { get; set; } = false;
 
+        private static string SettingsFilePath =>
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AlpNet", "pulse_settings.json");
+
         public static PulseAppSettings Load()
         {
-            try
-            {
-                string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AlpNet", "pulse_settings.json");
-                if (File.Exists(path))
-                {
-                    string json = File.ReadAllText(path);
-                    return JsonSerializer.Deserialize<PulseAppSettings>(json) ?? new PulseAppSettings();
-                }
-            }
-            catch { }
-            return new PulseAppSettings();
+            return SafeFileIo.LoadJson(SettingsFilePath, new PulseAppSettings());
         }
 
         public void Save()
         {
-            try
-            {
-                string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AlpNet");
-                if (!Directory.Exists(dir))
-                    Directory.CreateDirectory(dir);
-
-                string path = Path.Combine(dir, "pulse_settings.json");
-                string json = JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true });
-                File.WriteAllText(path, json);
-            }
-            catch { }
+            SafeFileIo.SaveJsonAtomic(SettingsFilePath, this);
         }
     }
 }

@@ -134,6 +134,7 @@ namespace AlpNetPulse
 
         private async void BtnVoiceStart_Click(object? sender, RoutedEventArgs? e)
         {
+            if (!FeatureFlags.EnableVoiceTranslation) return;
             if (_isTranslating)
             {
                 StopTranslator();
