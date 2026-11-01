@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -28,7 +28,7 @@ namespace AlpNetPulse
         private const string FIREBASE_AUTH_SECRET = "ExNWZwF2CkByKFILhfQ2BbTpuxYFlFAUO8quWwfc";
         public const string APP_ID = "alpnet-pulse";
         public const string APP_NAME = "AlpNet Pulse";
-        public const string APP_VERSION = "2.3.1";
+        public const string APP_VERSION = "2.3.2";
 
         private readonly HttpClient _http;
         private readonly string _logsDir;
@@ -392,13 +392,13 @@ namespace AlpNetPulse
 
                 using (var indexContent = new StringContent(indexJson, Encoding.UTF8, "application/json"))
                 {
-                    _ = _http.PutAsync(BuildFirebaseUrl($"alptogether/telemetry/user_index/{hwid}.json"), indexContent);
+                    await _http.PutAsync(BuildFirebaseUrl($"alptogether/telemetry/user_index/{hwid}.json"), indexContent);
                 }
 
-                if (!string.IsNullOrEmpty(AlpTogetherUserId))
+                if (!string.IsNullOrEmpty(AlpTogetherUserId) && !string.Equals(AlpTogetherUserId, hwid, StringComparison.OrdinalIgnoreCase))
                 {
                     using var atIndexContent = new StringContent(indexJson, Encoding.UTF8, "application/json");
-                    _ = _http.PutAsync(BuildFirebaseUrl($"alptogether/telemetry/user_index/{AlpTogetherUserId}.json"), atIndexContent);
+                    await _http.PutAsync(BuildFirebaseUrl($"alptogether/telemetry/user_index/{AlpTogetherUserId}.json"), atIndexContent);
                 }
 
                 _lastCloudFlush = DateTime.UtcNow;
@@ -823,8 +823,8 @@ namespace AlpNetPulse
 
             TaskScheduler.UnobservedTaskException += (s, e) =>
             {
-                Error("ÇÖKME", $"TaskScheduler UnobservedTaskException: {e.Exception.Message}\n{e.Exception.StackTrace}", e.Exception);
                 e.SetObserved();
+                Warn("SİSTEM", $"TaskScheduler UnobservedTaskException (gözlemlendi): {e.Exception.InnerException?.Message ?? e.Exception.Message}");
             };
 
             if (System.Windows.Application.Current != null)
