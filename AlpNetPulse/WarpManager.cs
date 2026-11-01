@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -70,7 +70,7 @@ namespace AlpNetPulse
             {
                 Timeout = TimeSpan.FromSeconds(15)
             };
-            _http.DefaultRequestHeaders.Add("User-Agent", "AlpNetPulse/2.3.0");
+            _http.DefaultRequestHeaders.Add("User-Agent", "AlpNetPulse/2.3.1");
 
             LoadUsageToday();
         }
@@ -564,7 +564,6 @@ PersistentKeepalive = 15
 
                     if (trimmed.StartsWith("[Peer]", StringComparison.OrdinalIgnoreCase))
                     {
-                        newLines.Add("DNS = 1.1.1.1, 1.0.0.1");
                         // [Interface] bitmeden MTU eklenmediyse araya enjekte et (1280 IPv6 Safe MTU)
                         if (!mtuAdded)
                         {
@@ -599,6 +598,7 @@ PersistentKeepalive = 15
                             newLines.Add(endpointLine);
                             newLines.Add("PersistentKeepalive = 15");
                             newLines.Add(allowedAppsLine);
+                            newLines.Add(disallowedAppsLine);
                                                         newLines.Add(disallowedIPsLine);
                             keepaliveAdded = true;
                             allowedAppsAdded = true;
@@ -616,6 +616,7 @@ PersistentKeepalive = 15
                     if (!allowedAppsAdded)
                     {
                         newLines.Add(allowedAppsLine);
+                        newLines.Add(disallowedAppsLine);
                                                 newLines.Add(disallowedIPsLine);
                     }
                 }
