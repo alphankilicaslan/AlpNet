@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Diagnostics;
 using System.IO.Pipes;
 using System.Text;
@@ -36,12 +36,30 @@ namespace AlpNetPulse
             }
         }
 
+        private static bool IsConfiguredValidClientId(string clientId)
+        {
+            if (string.IsNullOrWhiteSpace(clientId)) return false;
+            if (clientId == "139000000000000000") return false;
+            if (clientId.Length > 10 && clientId.EndsWith("0000000000")) return false;
+            return true;
+        }
+
         private async Task ConnectionLoopAsync(CancellationToken token)
         {
+            if (!IsConfiguredValidClientId(CLIENT_ID))
+            {
+                AlpNetTelemetryService.Instance.Log("DISCORD", "Discord RPC: Uygulama ID yapılandırılmamış (varsayılan dummy ID). IPC döngüsü başlatılmadı.");
+                return;
+            }
+
+            int failedAttempts = 0;
+            int failedHandshakes = 0;
+
             while (!token.IsCancellationRequested)
             {
                 if (!_isConnected)
                 {
+                    bool connectedThisCycle = false;
                     try
                     {
                         for (int i = 0; i < 10; i++)
@@ -58,6 +76,7 @@ namespace AlpNetPulse
 
                                 _pipeStream = pipe;
                                 _isConnected = true;
+                                connectedThisCycle = true;
                                 AlpNetTelemetryService.Instance.Info("DISCORD", $"Discord RPC bağlantısı kuruldu ({pipeName}).");
 
                                 // Send Handshake (Opcode 0)
@@ -69,6 +88,8 @@ namespace AlpNetPulse
 
                                 // Send initial presence
                                 await SendPresenceAsync();
+                                failedAttempts = 0;
+                                failedHandshakes = 0;
                                 break;
                             }
                             catch
@@ -80,11 +101,24 @@ namespace AlpNetPulse
                         }
                     }
                     catch { }
+
+                    if (!connectedThisCycle)
+                    {
+                        failedAttempts++;
+                    }
+                }
+
+                if (failedHandshakes >= 3)
+                {
+                    AlpNetTelemetryService.Instance.Warn("DISCORD", "Discord RPC: 3 başarısız el sıkışma denemesinden sonra IPC döngüsü sonlandırıldı.");
+                    break;
                 }
 
                 try
                 {
-                    await Task.Delay(15000, token).ConfigureAwait(false);
+                    // Exponential backoff: 15s -> 30s -> 60s -> max 120s
+                    int delayMs = Math.Min(15000 * (int)Math.Pow(2, Math.Max(0, failedAttempts - 1)), 120000);
+                    await Task.Delay(delayMs, token).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {

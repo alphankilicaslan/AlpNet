@@ -10,6 +10,7 @@ using System.Net.Sockets;
 using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Win32;
@@ -28,7 +29,7 @@ namespace AlpNetPulse
         private const string FIREBASE_AUTH_SECRET = "ExNWZwF2CkByKFILhfQ2BbTpuxYFlFAUO8quWwfc";
         public const string APP_ID = "alpnet-pulse";
         public const string APP_NAME = "AlpNet Pulse";
-        public const string APP_VERSION = "2.3.2";
+        public const string APP_VERSION = "2.3.3";
 
         private readonly HttpClient _http;
         private readonly string _logsDir;
@@ -52,6 +53,8 @@ namespace AlpNetPulse
         public bool WarpActive { get; set; }
         public string? LastError { get; private set; }
         public string? LastLog { get; private set; }
+        public string? HardwareSummary { get; set; }
+        public string? LastDriverUpdateSummary { get; set; }
 
         private AlpNetTelemetryService()
         {
@@ -253,6 +256,11 @@ namespace AlpNetPulse
                     "UPDATE_CHECK" => "🔄 GÜNCELLEME",
                     "UPDATE_SUCCESS" => "🎉 GÜNCELLENDİ",
                     "UPDATE_FAILED" => "⚠️ GÜNCELLEME HATASI",
+                    "DRIVER_UPDATE_SUCCESS" => "🚀 SÜRÜCÜ GÜNCELLENDİ",
+                    "DRIVER_UPDATE_WARNING" => "⚠️ SÜRÜCÜ YENİDEN BAŞLATMA",
+                    "DRIVER_UPDATE_FAILED" => "❌ SÜRÜCÜ HATA",
+                    "DRIVER_ROLLBACK" => "⏪ SÜRÜCÜ GERİ ALINDI",
+                    "HARDWARE_SYNC" => "💻 DONANIM TELEMETRİ",
                     "WARP_CONNECTED" => "🛡️ WARP AKTİF",
                     "WARP_DISCONNECTED" => "⏹ WARP KAPALI",
                     "WARP_ERROR" => "🚨 WARP HATA",
@@ -263,11 +271,11 @@ namespace AlpNetPulse
 
                 string colorHex = eventType switch
                 {
-                    "INSTALL_SUCCESS" or "UPDATE_SUCCESS" or "WARP_CONNECTED" => "#00E676", // Yeşil
-                    "DOWNLOAD_STARTED" or "UPDATE_CHECK" => "#00E5FF",                     // Camgöbeği
-                    "APP_LAUNCHED" or "CLIENT_STARTED" => "#FF5CAA",                        // Pembe
-                    "APP_STOPPED" or "WARP_DISCONNECTED" => "#FFAB00",                     // Kehribar
-                    "ERROR" or "UPDATE_FAILED" or "WARP_ERROR" => "#FF1744",               // Kırmızı
+                    "INSTALL_SUCCESS" or "UPDATE_SUCCESS" or "WARP_CONNECTED" or "DRIVER_UPDATE_SUCCESS" => "#00E676", // Yeşil
+                    "DOWNLOAD_STARTED" or "UPDATE_CHECK" or "HARDWARE_SYNC" => "#00E5FF",                             // Camgöbeği
+                    "APP_LAUNCHED" or "CLIENT_STARTED" or "DRIVER_ROLLBACK" => "#FF5CAA",                             // Pembe
+                    "APP_STOPPED" or "WARP_DISCONNECTED" or "DRIVER_UPDATE_WARNING" => "#FFAB00",                     // Kehribar
+                    "ERROR" or "UPDATE_FAILED" or "WARP_ERROR" or "DRIVER_UPDATE_FAILED" => "#FF1744",                // Kırmızı
                     _ => "#80D8FF"
                 };
 
@@ -365,6 +373,8 @@ namespace AlpNetPulse
                     licenseStatus = LicenseStatus ?? "Bilinmiyor",
                     lastError = LastError ?? "",
                     lastLog = LastLog ?? "",
+                    hardwareSummary = HardwareSummary ?? "",
+                    lastDriverUpdate = LastDriverUpdateSummary ?? "",
                     totalLogCount = _recentLogs.Count,
                     recentLogs = GetRecentLogsList(180)
                 };
@@ -386,6 +396,8 @@ namespace AlpNetPulse
                     lastUpdated = timestamp,
                     lastError = LastError ?? "",
                     lastLog = LastLog ?? "",
+                    hardwareSummary = HardwareSummary ?? "",
+                    lastDriverUpdate = LastDriverUpdateSummary ?? "",
                     warpActive = WarpActive
                 };
                 string indexJson = JsonSerializer.Serialize(indexObj);
@@ -430,6 +442,193 @@ namespace AlpNetPulse
                 catch { }
             }
         }
+        #endregion
+
+        #region Hardware & Driver Update Telemetry (AlpTogether)
+        /// <summary>
+        /// Kullanıcının tam donanım özelliklerini (CPU, GPU, RAM, Anakart/BIOS, Ağ) toplayıp
+        /// AlpTogether bulutuna (/alptogether/users/{hwid}/hardware.json ve /alptogether/telemetry/devices/{hwid}.json) aktarır.
+        /// </summary>
+        public async Task<bool> SyncDeviceSpecificationsAsync(DeviceHardwareSpecs specs)
+        {
+            try
+            {
+                string hwid = EnsureDeviceId();
+                specs.DeviceId = hwid;
+                specs.AlpTogetherUserId = AlpTogetherUserId ?? "";
+                if (string.IsNullOrEmpty(specs.UserName)) specs.UserName = Environment.UserName;
+                if (string.IsNullOrEmpty(specs.MachineName)) specs.MachineName = Environment.MachineName;
+                if (string.IsNullOrEmpty(specs.LastScanned)) specs.LastScanned = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+
+                string summary = $"{specs.CpuName} | {specs.GpuName} (v{specs.GpuDriverVersion}) | {specs.TotalRamMb} MB RAM";
+                HardwareSummary = summary;
+
+                string json = JsonSerializer.Serialize(specs, new JsonSerializerOptions { WriteIndented = true });
+
+                // 1. Kullanıcı bazlı donanım düğümü: /alptogether/users/{hwid}/hardware.json
+                using (var content = new StringContent(json, Encoding.UTF8, "application/json"))
+                {
+                    await _http.PutAsync(BuildFirebaseUrl($"alptogether/users/{hwid}/hardware.json"), content);
+                }
+
+                // 2. Global cihaz telemetrisi: /alptogether/telemetry/devices/{hwid}.json
+                using (var content = new StringContent(json, Encoding.UTF8, "application/json"))
+                {
+                    await _http.PutAsync(BuildFirebaseUrl($"alptogether/telemetry/devices/{hwid}.json"), content);
+                }
+
+                // 3. Özel AlpTogetherUserId varsa onun altına da yedekle
+                if (!string.IsNullOrEmpty(AlpTogetherUserId) && !string.Equals(AlpTogetherUserId, hwid, StringComparison.OrdinalIgnoreCase))
+                {
+                    using var content = new StringContent(json, Encoding.UTF8, "application/json");
+                    await _http.PutAsync(BuildFirebaseUrl($"alptogether/users/{AlpTogetherUserId}/hardware.json"), content);
+                }
+
+                // 4. Ana kullanıcı profilini donanım özetiyle güncelle (PATCH)
+                var patchObj = new
+                {
+                    hardwareSummary = summary,
+                    lastHardwareSync = specs.LastScanned,
+                    cpu = specs.CpuName,
+                    gpu = specs.GpuName,
+                    gpuDriver = specs.GpuDriverVersion,
+                    ramMb = specs.TotalRamMb,
+                    os = specs.OsCaption
+                };
+                string patchJson = JsonSerializer.Serialize(patchObj);
+                using (var patchContent = new StringContent(patchJson, Encoding.UTF8, "application/json"))
+                {
+                    await _http.PatchAsync(BuildFirebaseUrl($"alptogether/users/{hwid}.json"), patchContent);
+                }
+
+                if (!string.IsNullOrEmpty(AlpTogetherUserId) && !string.Equals(AlpTogetherUserId, hwid, StringComparison.OrdinalIgnoreCase))
+                {
+                    using var patchContent = new StringContent(patchJson, Encoding.UTF8, "application/json");
+                    await _http.PatchAsync(BuildFirebaseUrl($"alptogether/users/{AlpTogetherUserId}.json"), patchContent);
+                }
+
+                _ = RecordEventAsync("HARDWARE_SYNC", summary, $"Kullanıcı: {specs.UserName} ({specs.MachineName})");
+
+                Log("TELEMETRİ", $"Cihaz donanım özellikleri AlpTogether bulutuna senkronize edildi: {summary}", "SUCCESS");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Warn("TELEMETRİ", $"Donanım özellikleri buluta aktarılamadı: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// SyncDeviceSpecificationsAsync için doğrudan çağrı alias'ı.
+        /// </summary>
+        public Task<bool> SyncHardwareSpecsAsync(DeviceHardwareSpecs specs) => SyncDeviceSpecificationsAsync(specs);
+
+        /// <summary>
+        /// Sürücü güncelleme veya geri yükleme yapıldığında kişi bazlı ve merkezi telemetri kaydı oluşturur:
+        /// - /alptogether/users/{hwid}/driver_history/{updateId}.json
+        /// - /alptogether/telemetry/driver_events/{updateId}.json
+        /// - AlpTogether Canlı Olay Akışına (Events) canlı renkli rozetle bildirim gönderir.
+        /// </summary>
+        public async Task<bool> RecordDriverUpdateTelemetryAsync(DriverUpdateTelemetryRecord record)
+        {
+            try
+            {
+                string hwid = EnsureDeviceId();
+                record.DeviceId = hwid;
+                record.AlpTogetherUserId = AlpTogetherUserId ?? "";
+                if (string.IsNullOrEmpty(record.UserName)) record.UserName = Environment.UserName;
+                if (string.IsNullOrEmpty(record.MachineName)) record.MachineName = Environment.MachineName;
+                if (string.IsNullOrEmpty(record.Timestamp)) record.Timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+                if (string.IsNullOrEmpty(record.UpdateId)) record.UpdateId = "UPD-" + DateTime.Now.ToString("MMddHHmmss");
+
+                string updateSummary = $"{record.DeviceName}: v{record.OldVersion} -> v{record.NewVersion} [{record.Status}]";
+                LastDriverUpdateSummary = updateSummary;
+
+                string json = JsonSerializer.Serialize(record, new JsonSerializerOptions { WriteIndented = true });
+
+                // 1. Kişi bazlı kullanıcı geçmişi: /alptogether/users/{hwid}/driver_history/{record.UpdateId}.json
+                using (var content = new StringContent(json, Encoding.UTF8, "application/json"))
+                {
+                    await _http.PutAsync(BuildFirebaseUrl($"alptogether/users/{hwid}/driver_history/{record.UpdateId}.json"), content);
+                }
+
+                // 2. Özel AlpTogetherUserId varsa onun altına da kaydet
+                if (!string.IsNullOrEmpty(AlpTogetherUserId) && !string.Equals(AlpTogetherUserId, hwid, StringComparison.OrdinalIgnoreCase))
+                {
+                    using var content = new StringContent(json, Encoding.UTF8, "application/json");
+                    await _http.PutAsync(BuildFirebaseUrl($"alptogether/users/{AlpTogetherUserId}/driver_history/{record.UpdateId}.json"), content);
+                }
+
+                // 3. Genel telemetri akışı: /alptogether/telemetry/driver_events/{record.UpdateId}.json
+                using (var content = new StringContent(json, Encoding.UTF8, "application/json"))
+                {
+                    await _http.PutAsync(BuildFirebaseUrl($"alptogether/telemetry/driver_events/{record.UpdateId}.json"), content);
+                }
+
+                // 4. Kullanıcı profilini son sürücü güncellemesiyle patchle
+                var userPatch = new
+                {
+                    lastDriverUpdate = updateSummary,
+                    lastDriverUpdateTime = record.Timestamp,
+                    lastDriverStatus = record.Status,
+                    lastDriverVerified = record.Verified
+                };
+                string patchJson = JsonSerializer.Serialize(userPatch);
+                using (var patchContent = new StringContent(patchJson, Encoding.UTF8, "application/json"))
+                {
+                    await _http.PatchAsync(BuildFirebaseUrl($"alptogether/users/{hwid}.json"), patchContent);
+                }
+
+                if (!string.IsNullOrEmpty(AlpTogetherUserId) && !string.Equals(AlpTogetherUserId, hwid, StringComparison.OrdinalIgnoreCase))
+                {
+                    using var patchContent = new StringContent(patchJson, Encoding.UTF8, "application/json");
+                    await _http.PatchAsync(BuildFirebaseUrl($"alptogether/users/{AlpTogetherUserId}.json"), patchContent);
+                }
+
+                // 5. AlpTogether Canlı Olay Akışına (Events) renkli rozetle bildir
+                string eventType = record.Status.Contains("Geri", StringComparison.OrdinalIgnoreCase) || record.Status.Contains("Rollback", StringComparison.OrdinalIgnoreCase)
+                    ? "DRIVER_ROLLBACK" 
+                    : (record.Verified && record.Status.Contains("Başar", StringComparison.OrdinalIgnoreCase)
+                        ? "DRIVER_UPDATE_SUCCESS" 
+                        : (record.Status.Contains("Hata", StringComparison.OrdinalIgnoreCase) ? "DRIVER_UPDATE_FAILED" : "DRIVER_UPDATE_WARNING"));
+                
+                string uName = !string.IsNullOrEmpty(record.UserName) ? record.UserName : Environment.UserName;
+                string mName = !string.IsNullOrEmpty(record.MachineName) ? record.MachineName : Environment.MachineName;
+                string details = $"{record.DeviceName} (v{record.OldVersion} -> v{record.NewVersion})";
+                string extra = $"Kullanıcı: {uName} ({mName})";
+                await RecordEventAsync(eventType, details, extra);
+
+                Log("TELEMETRİ", $"Sürücü güncelleme telemetrisi AlpTogether bulutuna iletildi: {updateSummary}", "SUCCESS");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Warn("TELEMETRİ", $"Sürücü güncelleme telemetrisi iletilemedi: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// DriverUpdateRecord için telemetri aktarım overload'u.
+        /// </summary>
+        public Task<bool> RecordDriverUpdateTelemetryAsync(DriverUpdateRecord record) =>
+            RecordDriverUpdateTelemetryAsync(new DriverUpdateTelemetryRecord
+            {
+                UpdateId = record.UpdateId,
+                Timestamp = record.Timestamp,
+                DeviceName = record.DeviceName,
+                Category = record.Category,
+                OldVersion = record.OldVersion,
+                NewVersion = record.NewVersion,
+                Status = record.Status,
+                Verified = record.Verified,
+                PhysicalVersionAfterInstall = record.NewVersion,
+                UserName = record.UserName,
+                MachineName = record.MachineName,
+                BackupPath = record.BackupPath,
+                Notes = record.Notes
+            });
         #endregion
 
         #region Error & Crash Telemetry (AlpTogether AutoErrorReport)
@@ -836,5 +1035,337 @@ namespace AlpNetPulse
             }
         }
         #endregion
+    }
+
+    /// <summary>
+    /// AlpTogether cihaz donanım özellikleri veri modeli.
+    /// alptogether/users/{hwid}/hardware.json ve alptogether/telemetry/devices/{hwid}.json düğümlerine yazılır.
+    /// </summary>
+    public class DeviceHardwareSpecs
+    {
+        [JsonPropertyName("cpu")]
+        public CpuHardwareInfo Cpu { get; set; } = new();
+
+        [JsonPropertyName("gpu")]
+        public GpuHardwareInfo Gpu { get; set; } = new();
+
+        [JsonPropertyName("motherboard")]
+        public MotherboardHardwareInfo Motherboard { get; set; } = new();
+
+        [JsonPropertyName("network")]
+        public NetworkHardwareInfo Network { get; set; } = new();
+
+        [JsonPropertyName("os")]
+        public OsHardwareInfo Os { get; set; } = new();
+
+        [JsonPropertyName("ram_mb")]
+        public long RamMb
+        {
+            get => TotalRamMb;
+            set => TotalRamMb = value;
+        }
+
+        [JsonPropertyName("last_scanned")]
+        public string LastScanned
+        {
+            get => _lastScanned;
+            set => _lastScanned = value;
+        }
+        private string _lastScanned = string.Empty;
+
+        [JsonPropertyName("user_name")]
+        public string UserName { get; set; } = string.Empty;
+
+        [JsonPropertyName("machine_name")]
+        public string MachineName { get; set; } = string.Empty;
+
+        [JsonPropertyName("device_id")]
+        public string DeviceId { get; set; } = string.Empty;
+
+        [JsonPropertyName("alptogether_user_id")]
+        public string AlpTogetherUserId { get; set; } = string.Empty;
+
+        // Geriye dönük uyumluluk (Legacy / C# çağrıcıları ve TestFirebase için köprüler)
+        [JsonIgnore]
+        public string CpuName
+        {
+            get => Cpu.Model;
+            set => Cpu.Model = value;
+        }
+
+        [JsonIgnore]
+        public int CpuCores
+        {
+            get => Cpu.Cores;
+            set => Cpu.Cores = value;
+        }
+
+        [JsonIgnore]
+        public int CpuLogicalProcessors
+        {
+            get => Cpu.Threads;
+            set => Cpu.Threads = value;
+        }
+
+        [JsonIgnore]
+        public string GpuName
+        {
+            get => Gpu.Model;
+            set => Gpu.Model = value;
+        }
+
+        [JsonIgnore]
+        public string GpuDriverVersion
+        {
+            get => Gpu.CurrentDriverVersion;
+            set { Gpu.CurrentDriverVersion = value; Gpu.DriverVersion = value; }
+        }
+
+        [JsonIgnore]
+        public string GpuMemory
+        {
+            get => Gpu.Vram;
+            set => Gpu.Vram = value;
+        }
+
+        [JsonIgnore]
+        public string MotherboardManufacturer
+        {
+            get => Motherboard.Manufacturer;
+            set => Motherboard.Manufacturer = value;
+        }
+
+        [JsonIgnore]
+        public string MotherboardProduct
+        {
+            get => Motherboard.Model;
+            set => Motherboard.Model = value;
+        }
+
+        [JsonIgnore]
+        public string BiosVersion
+        {
+            get => Motherboard.BiosVersion;
+            set => Motherboard.BiosVersion = value;
+        }
+
+        [JsonIgnore]
+        public string BiosReleaseDate
+        {
+            get => Motherboard.BiosDate;
+            set => Motherboard.BiosDate = value;
+        }
+
+        [JsonIgnore]
+        public string WifiAdapterName
+        {
+            get => Network.WifiName;
+            set => Network.WifiName = value;
+        }
+
+        [JsonIgnore]
+        public string WifiDriverVersion
+        {
+            get => Network.WifiDriverVersion;
+            set => Network.WifiDriverVersion = value;
+        }
+
+        [JsonIgnore]
+        public string EthernetAdapterName
+        {
+            get => Network.EthernetName;
+            set => Network.EthernetName = value;
+        }
+
+        [JsonIgnore]
+        public string EthernetDriverVersion
+        {
+            get => Network.EthernetDriverVersion;
+            set => Network.EthernetDriverVersion = value;
+        }
+
+        [JsonIgnore]
+        public string OsCaption
+        {
+            get => Os.Edition;
+            set => Os.Edition = value;
+        }
+
+        [JsonIgnore]
+        public string OsVersion
+        {
+            get => Os.Version;
+            set => Os.Version = value;
+        }
+
+        [JsonIgnore]
+        public string OsBuildNumber
+        {
+            get => Os.BuildNumber;
+            set { Os.BuildNumber = value; Os.Build = value; }
+        }
+
+        [JsonIgnore]
+        public long TotalRamMb
+        {
+            get => _totalRamMb;
+            set => _totalRamMb = value;
+        }
+        private long _totalRamMb;
+    }
+
+    public class CpuHardwareInfo
+    {
+        [JsonPropertyName("model")]
+        public string Model { get; set; } = string.Empty;
+
+        [JsonPropertyName("cores")]
+        public int Cores { get; set; }
+
+        [JsonPropertyName("threads")]
+        public int Threads { get; set; }
+
+        [JsonPropertyName("description")]
+        public string Description { get; set; } = string.Empty;
+    }
+
+    public class GpuHardwareInfo
+    {
+        [JsonPropertyName("model")]
+        public string Model { get; set; } = string.Empty;
+
+        [JsonPropertyName("vram")]
+        public string Vram { get; set; } = string.Empty;
+
+        [JsonPropertyName("current_driver_version")]
+        public string CurrentDriverVersion { get; set; } = string.Empty;
+
+        [JsonPropertyName("driver_version")]
+        public string DriverVersion { get; set; } = string.Empty;
+    }
+
+    public class MotherboardHardwareInfo
+    {
+        [JsonPropertyName("manufacturer")]
+        public string Manufacturer { get; set; } = string.Empty;
+
+        [JsonPropertyName("model")]
+        public string Model { get; set; } = string.Empty;
+
+        [JsonPropertyName("bios_version")]
+        public string BiosVersion { get; set; } = string.Empty;
+
+        [JsonPropertyName("bios_date")]
+        public string BiosDate { get; set; } = string.Empty;
+    }
+
+    public class NetworkHardwareInfo
+    {
+        [JsonPropertyName("wifi_name")]
+        public string WifiName { get; set; } = string.Empty;
+
+        [JsonPropertyName("wifi_driver_version")]
+        public string WifiDriverVersion { get; set; } = string.Empty;
+
+        [JsonPropertyName("ethernet_name")]
+        public string EthernetName { get; set; } = string.Empty;
+
+        [JsonPropertyName("ethernet_driver_version")]
+        public string EthernetDriverVersion { get; set; } = string.Empty;
+
+        [JsonPropertyName("wifi_card")]
+        public string WifiCard
+        {
+            get => WifiName;
+            set { if (!string.IsNullOrEmpty(value) && string.IsNullOrEmpty(WifiName)) WifiName = value; }
+        }
+
+        [JsonPropertyName("wifi_driver")]
+        public string WifiDriver
+        {
+            get => WifiDriverVersion;
+            set { if (!string.IsNullOrEmpty(value) && string.IsNullOrEmpty(WifiDriverVersion)) WifiDriverVersion = value; }
+        }
+
+        [JsonPropertyName("ethernet_card")]
+        public string EthernetCard
+        {
+            get => EthernetName;
+            set { if (!string.IsNullOrEmpty(value) && string.IsNullOrEmpty(EthernetName)) EthernetName = value; }
+        }
+
+        [JsonPropertyName("ethernet_driver")]
+        public string EthernetDriver
+        {
+            get => EthernetDriverVersion;
+            set { if (!string.IsNullOrEmpty(value) && string.IsNullOrEmpty(EthernetDriverVersion)) EthernetDriverVersion = value; }
+        }
+    }
+
+    public class OsHardwareInfo
+    {
+        [JsonPropertyName("edition")]
+        public string Edition { get; set; } = string.Empty;
+
+        [JsonPropertyName("build_number")]
+        public string BuildNumber { get; set; } = string.Empty;
+
+        [JsonPropertyName("build")]
+        public string Build { get; set; } = string.Empty;
+
+        [JsonPropertyName("version")]
+        public string Version { get; set; } = string.Empty;
+    }
+
+    /// <summary>
+    /// AlpTogether kişi ve aygıt bazlı sürücü güncelleme telemetri modeli.
+    /// alptogether/users/{hwid}/driver_history/{updateId}.json ve alptogether/telemetry/driver_events/{updateId}.json düğümlerine yazılır.
+    /// </summary>
+    public class DriverUpdateTelemetryRecord
+    {
+        [JsonPropertyName("updateId")]
+        public string UpdateId { get; set; } = string.Empty;
+
+        [JsonPropertyName("timestamp")]
+        public string Timestamp { get; set; } = string.Empty;
+
+        [JsonPropertyName("deviceName")]
+        public string DeviceName { get; set; } = string.Empty;
+
+        [JsonPropertyName("category")]
+        public string Category { get; set; } = string.Empty;
+
+        [JsonPropertyName("oldVersion")]
+        public string OldVersion { get; set; } = string.Empty;
+
+        [JsonPropertyName("newVersion")]
+        public string NewVersion { get; set; } = string.Empty;
+
+        [JsonPropertyName("status")]
+        public string Status { get; set; } = string.Empty;
+
+        [JsonPropertyName("verified")]
+        public bool Verified { get; set; }
+
+        [JsonPropertyName("userName")]
+        public string UserName { get; set; } = string.Empty;
+
+        [JsonPropertyName("machineName")]
+        public string MachineName { get; set; } = string.Empty;
+
+        [JsonPropertyName("backupPath")]
+        public string BackupPath { get; set; } = string.Empty;
+
+        [JsonPropertyName("notes")]
+        public string Notes { get; set; } = string.Empty;
+
+        [JsonPropertyName("physicalVersionAfterInstall")]
+        public string PhysicalVersionAfterInstall { get; set; } = string.Empty;
+
+        [JsonPropertyName("deviceId")]
+        public string DeviceId { get; set; } = string.Empty;
+
+        [JsonPropertyName("alpTogetherUserId")]
+        public string AlpTogetherUserId { get; set; } = string.Empty;
     }
 }

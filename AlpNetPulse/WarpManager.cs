@@ -6,6 +6,8 @@ using System.Linq;
 using System.Net.Http;
 using System.Reflection;
 using System.Text.RegularExpressions;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 
 namespace AlpNetPulse
@@ -30,7 +32,8 @@ namespace AlpNetPulse
         private readonly string _wgcfPath;
         private readonly HttpClient _http;
 
-        public static readonly int[] FallbackPorts = new[] { 500, 2408, 4500, 1701 };
+        // Türkiye'de 2408 UDP ISP engelli olduğundan FallbackPorts listesinden çıkarılmıştır.
+        public static readonly int[] FallbackPorts = new[] { 500, 4500, 1701 };
         public int CurrentPort { get; private set; } = 500;
 
         public DateTime? WarpStartedAt { get; private set; }
@@ -70,7 +73,7 @@ namespace AlpNetPulse
             {
                 Timeout = TimeSpan.FromSeconds(15)
             };
-            _http.DefaultRequestHeaders.Add("User-Agent", "AlpNetPulse/2.3.2");
+            _http.DefaultRequestHeaders.Add("User-Agent", "AlpNetPulse/2.3.3");
 
             LoadUsageToday();
         }
@@ -716,7 +719,7 @@ PersistentKeepalive = 15
         // ═══════════════════════════════════════════════════════════
         //  PRE-DNS WARMUP ENGINE (Discord & Roblox Hızlı Ön Isıtma)
         // ═══════════════════════════════════════════════════════════
-        private static async Task WarmupTargetDomainsAsync()
+        public static async Task WarmupTargetDomainsAsync()
         {
             try
             {
@@ -904,7 +907,7 @@ PersistentKeepalive = 15
         // ═══════════════════════════════════════════════════════════
         //  DNS Ayarla (Güvenli IPv4 + Windows 11 DoH Şifreleme)
         // ═══════════════════════════════════════════════════════════
-        private static async Task SetCloudflareDnsAsync()
+        public static async Task SetCloudflareDnsAsync()
         {
             await Task.Run(() =>
             {
@@ -992,120 +995,258 @@ PersistentKeepalive = 15
         }
 
         // ═══════════════════════════════════════════════════════════
+        //  DISCORD SÜREÇ YÖNETİMİ & KONTROLÜ
+        // ═══════════════════════════════════════════════════════════
+        public static bool IsDiscordRunning()
+        {
+            try
+            {
+                string[] discordProcs = { "Discord", "DiscordPTB", "DiscordCanary", "DiscordDevelopment", "Vesktop", "webcord", "ArmCord", "Legcord", "Ripcord" };
+                return discordProcs.Any(name =>
+                {
+                    try { return Process.GetProcessesByName(name).Length > 0; }
+                    catch { return false; }
+                });
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        public static void CloseDiscordProcesses()
+        {
+            string[] discordProcs = { "Discord", "DiscordPTB", "DiscordCanary", "DiscordDevelopment", "Vesktop", "webcord", "ArmCord", "Legcord", "Ripcord" };
+
+            // 1) .NET Process.Kill(entireProcessTree: true)
+            foreach (var name in discordProcs)
+            {
+                try
+                {
+                    foreach (var p in Process.GetProcessesByName(name))
+                    {
+                        try { p.Kill(true); p.WaitForExit(1500); } catch { }
+                    }
+                }
+                catch { }
+            }
+
+            // Only kill Update.exe processes that belong to Discord or Discord clients
+            try
+            {
+                foreach (var p in Process.GetProcessesByName("Update"))
+                {
+                    try
+                    {
+                        string? exePath = null;
+                        try { exePath = p.MainModule?.FileName; } catch { }
+                        if (!string.IsNullOrEmpty(exePath) &&
+                            (exePath.IndexOf("Discord", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                             exePath.IndexOf("Vesktop", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                             exePath.IndexOf("webcord", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                             exePath.IndexOf("armcord", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                             exePath.IndexOf("legcord", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                             exePath.IndexOf("ripcord", StringComparison.OrdinalIgnoreCase) >= 0))
+                        {
+                            p.Kill(true);
+                            p.WaitForExit(1500);
+                        }
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+
+            // 2) Kalan kilitli alt süreçleri zorla sonlandır
+            try
+            {
+                var killPsi = new ProcessStartInfo("taskkill.exe", "/F /T /IM Discord.exe /IM DiscordPTB.exe /IM DiscordCanary.exe /IM DiscordDevelopment.exe /IM Vesktop.exe /IM webcord.exe /IM ArmCord.exe /IM Legcord.exe /IM Ripcord.exe")
+                {
+                    WindowStyle = ProcessWindowStyle.Hidden,
+                    CreateNoWindow = true,
+                    UseShellExecute = false
+                };
+                using var pKill = Process.Start(killPsi);
+                pKill?.WaitForExit(2000);
+            }
+            catch { }
+        }
+
+        // ═══════════════════════════════════════════════════════════
         //  DISCORD ÖNBELLEK VE BAĞLANTI ONARIMI (1 TIKLA OTOMATİK ÇÖZÜM)
         // ═══════════════════════════════════════════════════════════
-        public static async Task<bool> RepairDiscordCacheAsync(Action<string>? logCallback = null)
+        public static async Task<bool> RepairDiscordCacheAsync(Action<string>? logCallback = null, bool autoRelaunch = true)
         {
             return await Task.Run(async () =>
             {
                 try
                 {
+                    bool wasRunning = IsDiscordRunning();
                     logCallback?.Invoke("Discord ve istemci süreçleri güvenle kapatılıyor...");
-                    string[] discordProcs = { "Discord", "DiscordPTB", "DiscordCanary", "DiscordDevelopment", "Vesktop", "webcord", "ArmCord", "Legcord", "Ripcord" };
-                    
-                    // 1) .NET Process.Kill(entireProcessTree: true)
-                    foreach (var name in discordProcs)
+                    CloseDiscordProcesses();
+
+                    for (int i = 0; i < 20 && IsDiscordRunning(); i++)
                     {
-                        foreach (var p in Process.GetProcessesByName(name))
-                        {
-                            try { p.Kill(true); p.WaitForExit(1500); } catch { }
-                        }
+                        await Task.Delay(100);
                     }
 
-                    // Only kill Update.exe processes that belong to Discord or Discord clients (prevent killing Spotify, VS Code, etc.)
-                    foreach (var p in Process.GetProcessesByName("Update"))
-                    {
-                        try
-                        {
-                            string? exePath = null;
-                            try { exePath = p.MainModule?.FileName; } catch { }
-                            if (!string.IsNullOrEmpty(exePath) && 
-                                (exePath.IndexOf("Discord", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                                 exePath.IndexOf("Vesktop", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                                 exePath.IndexOf("webcord", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                                 exePath.IndexOf("armcord", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                                 exePath.IndexOf("legcord", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                                 exePath.IndexOf("ripcord", StringComparison.OrdinalIgnoreCase) >= 0))
-                            {
-                                p.Kill(true);
-                                p.WaitForExit(1500);
-                            }
-                        }
-                        catch { }
-                    }
+                    logCallback?.Invoke("Tüm kullanıcı profillerindeki bozuk Discord soketleri ve QUIC önbellekleri taranıyor...");
 
-                    // 2) Kalan kilitli alt süreçleri zorla sonlandır (Update.exe kaldırıldı)
+                    // 3) TÜM KULLANICI PROFİLLERİNİ TARA (Çoklu profil veya Admin oturumu desteği)
+                    var userProfiles = new List<(string Roaming, string Local)>();
+
+                    // Mevcut çalışan kullanıcının dizinleri
                     try
                     {
-                        var killPsi = new ProcessStartInfo("taskkill.exe", "/F /T /IM Discord.exe /IM DiscordPTB.exe /IM DiscordCanary.exe /IM DiscordDevelopment.exe /IM Vesktop.exe /IM webcord.exe /IM ArmCord.exe")
-                        {
-                            WindowStyle = ProcessWindowStyle.Hidden,
-                            CreateNoWindow = true,
-                            UseShellExecute = false
-                        };
-                        using var pKill = Process.Start(killPsi);
-                        pKill?.WaitForExit(2000);
+                        var curRoaming = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+                        var curLocal = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                        if (!string.IsNullOrEmpty(curRoaming) && !string.IsNullOrEmpty(curLocal))
+                            userProfiles.Add((curRoaming, curLocal));
                     }
                     catch { }
 
-                    System.Threading.Thread.Sleep(300);
-
-                    logCallback?.Invoke("Bozuk Discord ağ soketleri, oturum kayıtları ve önbellekleri temizleniyor...");
-                    var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-                    var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-                    string[] discordDirs = { "discord", "discordptb", "discordcanary", "discorddevelopment", "vesktop", "webcord", "ArmCord", "Legcord", "Ripcord" };
-
-                    foreach (var d in discordDirs)
+                    // C:\Users altındaki tüm kullanıcıları tara
+                    try
                     {
-                        // A) Roaming AppData (Chromium Network, Alt-Svc bozuk soketler ve önbellekler)
-                        var fullDir = Path.Combine(appData, d);
-                        if (Directory.Exists(fullDir))
+                        string systemDrive = Path.GetPathRoot(Environment.SystemDirectory) ?? @"C:\";
+                        string usersDir = Path.Combine(systemDrive, "Users");
+                        if (Directory.Exists(usersDir))
                         {
-                            // 1) Chromium Network State ve Alt-Svc / HTTP/2 bozuk durum dosyalarını sıfırla
-                            var networkDir = Path.Combine(fullDir, "Network");
-                            if (Directory.Exists(networkDir))
+                            foreach (var uDir in Directory.GetDirectories(usersDir))
                             {
-                                string[] networkFiles = { "Network Persistent State", "TransportSecurity", "Trust Tokens", "Trust Tokens-journal" };
-                                foreach (var nf in networkFiles)
-                                {
-                                    var fPath = Path.Combine(networkDir, nf);
-                                    if (File.Exists(fPath)) { try { File.Delete(fPath); } catch { } }
-                                }
-                            }
+                                string uName = Path.GetFileName(uDir);
+                                if (uName.Equals("Public", StringComparison.OrdinalIgnoreCase) ||
+                                    uName.Equals("Default", StringComparison.OrdinalIgnoreCase) ||
+                                    uName.Equals("All Users", StringComparison.OrdinalIgnoreCase) ||
+                                    uName.Equals("Default User", StringComparison.OrdinalIgnoreCase))
+                                    continue;
 
-                            // 2) Önbellek ve mesaj senkronizasyon dizinlerini temizle (Local Storage korunur, oturum kapanmaz)
-                            string[] cacheFolders = { 
-                                "Cache", "Code Cache", "GPUCache", "DawnGraphiteCache", "DawnWebGPUCache", 
-                                "blob_storage", "Session Storage", "IndexedDB", "Service Worker", "Shared Dictionary", 
-                                "shared_proto_db", "WebStorage", Path.Combine("Network", "Cache"), Path.Combine("Network", "Code Cache") 
-                            };
-                            foreach (var cf in cacheFolders)
-                            {
-                                var target = Path.Combine(fullDir, cf);
-                                if (Directory.Exists(target))
+                                string r = Path.Combine(uDir, "AppData", "Roaming");
+                                string l = Path.Combine(uDir, "AppData", "Local");
+                                if (Directory.Exists(r) || Directory.Exists(l))
                                 {
-                                    try { Directory.Delete(target, true); } catch { }
+                                    if (!userProfiles.Any(p => string.Equals(p.Roaming, r, StringComparison.OrdinalIgnoreCase)))
+                                    {
+                                        userProfiles.Add((r, l));
+                                    }
                                 }
                             }
                         }
+                    }
+                    catch { }
 
-                        // B) Local AppData önbellekleri
-                        var locDir = Path.Combine(localAppData, d);
-                        if (Directory.Exists(locDir))
+                    string[] discordDirs = { "discord", "discordptb", "discordcanary", "discorddevelopment", "vesktop", "webcord", "ArmCord", "Legcord", "Ripcord" };
+
+                    foreach (var (rDir, lDir) in userProfiles)
+                    {
+                        foreach (var d in discordDirs)
                         {
-                            string[] locCache = { "Cache", "Code Cache", "GPUCache", "CrashDumps" };
-                            foreach (var cf in locCache)
+                            // A) Roaming AppData (Chromium Network, Alt-Svc bozuk QUIC soketleri ve önbellekler)
+                            var fullDir = Path.Combine(rDir, d);
+                            if (Directory.Exists(fullDir))
                             {
-                                var target = Path.Combine(locDir, cf);
-                                if (Directory.Exists(target))
+                                // 1) Chromium Network State ve Alt-Svc / HTTP/3 QUIC bozuk durum dosyalarını sıfırla
+                                var networkDir = Path.Combine(fullDir, "Network");
+                                if (Directory.Exists(networkDir))
                                 {
-                                    try { Directory.Delete(target, true); } catch { }
+                                    string[] networkFiles = { 
+                                        "Network Persistent State", "Network Persistent State.tmp", 
+                                        "TransportSecurity", "Trust Tokens", "Trust Tokens-journal", 
+                                        "Reporting and NEL", "Reporting and NEL-journal" 
+                                    };
+                                    foreach (var nf in networkFiles)
+                                    {
+                                        SafeDeleteFile(Path.Combine(networkDir, nf));
+                                    }
+                                    try
+                                    {
+                                        foreach (var tmpFile in Directory.GetFiles(networkDir, "*.tmp"))
+                                        {
+                                            SafeDeleteFile(tmpFile);
+                                        }
+                                    }
+                                    catch { }
+                                }
+
+                                // 2) Bozuk mesaj veritabanı, GPU ve Chromium önbelleklerini temizle (Local Storage korunur, oturum düşmez)
+                                string[] cacheFolders = { 
+                                    "Cache", "Code Cache", "GPUCache", "DawnCache", "DawnGraphiteCache", "DawnWebGPUCache", 
+                                    "blob_storage", "Session Storage", "IndexedDB", "Service Worker", "Shared Dictionary", 
+                                    "shared_proto_db", "WebStorage", "VideoDecodeStats", "Crashpad",
+                                    Path.Combine("Network", "Cache"), Path.Combine("Network", "Code Cache") 
+                                };
+                                foreach (var cf in cacheFolders)
+                                {
+                                    var target = Path.Combine(fullDir, cf);
+                                    if (Directory.Exists(target))
+                                    {
+                                        try { Directory.Delete(target, true); } catch { }
+                                    }
+                                }
+
+                                // 3) Kilit dosyalarını sil
+                                var lockPath = Path.Combine(fullDir, "lockfile");
+                                if (File.Exists(lockPath)) { try { File.Delete(lockPath); } catch { } }
+
+                                // 4) CRITICAL FIX: Discord'un kilitlenen HTTP/3 (QUIC) protokolünü settings.json içinde devre dışı bırak
+                                // Bu işlem mesajların sunucudan gecikmesiz ve hatasız (TCP HTTP/2) yüklenmesini garanti eder!
+                                try
+                                {
+                                    string settingsFile = Path.Combine(fullDir, "settings.json");
+                                    JsonNode? rootNode = null;
+                                    if (File.Exists(settingsFile))
+                                    {
+                                        try
+                                        {
+                                            string jsonText = File.ReadAllText(settingsFile);
+                                            rootNode = JsonNode.Parse(jsonText);
+                                        }
+                                        catch { }
+                                    }
+
+                                    rootNode ??= new JsonObject();
+
+                                    JsonObject switchesObj;
+                                    if (rootNode["chromiumSwitches"] is JsonObject existingSwitches)
+                                    {
+                                        switchesObj = existingSwitches;
+                                    }
+                                    else
+                                    {
+                                        switchesObj = new JsonObject();
+                                        rootNode["chromiumSwitches"] = switchesObj;
+                                    }
+
+                                    // QUIC'i devre dışı bırak
+                                    switchesObj["disable-quic"] = "true";
+
+                                    var jsonOptions = new JsonSerializerOptions { WriteIndented = true };
+                                    File.WriteAllText(settingsFile, rootNode.ToJsonString(jsonOptions));
+                                }
+                                catch { }
+                            }
+
+                            // B) Local AppData önbellekleri
+                            if (!string.IsNullOrEmpty(lDir) && Directory.Exists(lDir))
+                            {
+                                var locDir = Path.Combine(lDir, d);
+                                if (Directory.Exists(locDir))
+                                {
+                                    string[] locCache = { "Cache", "Code Cache", "GPUCache", "CrashDumps" };
+                                    foreach (var cf in locCache)
+                                    {
+                                        var target = Path.Combine(locDir, cf);
+                                        if (Directory.Exists(target))
+                                        {
+                                            try { Directory.Delete(target, true); } catch { }
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
 
-                    // 3) Çakışan ortak anahtarlı profil kontrolü ve cihaza özel benzersiz kimlik onarımı
+                    // 4) Çakışan ortak anahtarlı profil kontrolü ve cihaza özel benzersiz kimlik onarımı
                     try
                     {
                         string[] candidateResDirs = {
@@ -1154,7 +1295,7 @@ PersistentKeepalive = 15
                     }
                     catch { }
 
-                    // 4) WARP tüneli aktifse WireSock servisini ve soket kancalarını sıfırla (Kapa-Aç)
+                    // 5) WARP tüneli aktifse WireSock servisini ve soket kancalarını sıfırla (Kapa-Aç)
                     try
                     {
                         if (IsWireSockServiceRunning())
@@ -1172,12 +1313,15 @@ PersistentKeepalive = 15
                     }
                     catch { }
 
-                    // 5) DNS ve ARP önbelleğini temizle, Cloudflare DNS tazele
+                    // 6) DNS ve ARP önbelleğini temizle, Cloudflare DNS tazele
                     try
                     {
-                        using var p1 = Process.Start(new ProcessStartInfo("ipconfig.exe", "/flushdns") { WindowStyle = ProcessWindowStyle.Hidden, CreateNoWindow = true, UseShellExecute = false }); p1?.WaitForExit(1000); using var p2 = Process.Start(new ProcessStartInfo("arp.exe", "-d *") { WindowStyle = ProcessWindowStyle.Hidden, CreateNoWindow = true, UseShellExecute = false }); p2?.WaitForExit(1000);
-
-                    } catch { }
+                        using var p1 = Process.Start(new ProcessStartInfo("ipconfig.exe", "/flushdns") { WindowStyle = ProcessWindowStyle.Hidden, CreateNoWindow = true, UseShellExecute = false }); 
+                        p1?.WaitForExit(1000); 
+                        using var p2 = Process.Start(new ProcessStartInfo("arp.exe", "-d *") { WindowStyle = ProcessWindowStyle.Hidden, CreateNoWindow = true, UseShellExecute = false }); 
+                        p2?.WaitForExit(1000);
+                    } 
+                    catch { }
 
                     _ = Task.Run(async () =>
                     {
@@ -1185,7 +1329,15 @@ PersistentKeepalive = 15
                         await WarmupTargetDomainsAsync();
                     });
 
-                    logCallback?.Invoke("Discord önbelleği, mesaj veritabanı ve ağ durumu başarıyla onarıldı!");
+                    logCallback?.Invoke("Discord önbelleği, mesaj soketleri ve QUIC kilitlenmeleri başarıyla onarıldı!");
+
+                    if (autoRelaunch || wasRunning)
+                    {
+                        logCallback?.Invoke("Discord HTTP/2 güvenli modunda (--disable-quic) yeniden başlatılıyor...");
+                        await Task.Delay(300);
+                        LaunchDiscord();
+                    }
+
                     return true;
                 }
                 catch (Exception ex)
@@ -1194,6 +1346,394 @@ PersistentKeepalive = 15
                     return false;
                 }
             });
+        }
+
+        private static void SafeDeleteFile(string path)
+        {
+            if (!File.Exists(path)) return;
+            for (int i = 0; i < 3; i++)
+            {
+                try
+                {
+                    File.Delete(path);
+                    return;
+                }
+                catch (IOException)
+                {
+                    System.Threading.Thread.Sleep(60);
+                }
+                catch
+                {
+                    return;
+                }
+            }
+        }
+
+        public static void EnsureDiscordShortcutsDisableQuic()
+        {
+            try
+            {
+                var shortcutPaths = new List<string>();
+                var searchRoots = new List<string>();
+
+                try
+                {
+                    string curDesktop = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
+                    if (!string.IsNullOrEmpty(curDesktop)) searchRoots.Add(curDesktop);
+                    string commonDesktop = Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory);
+                    if (!string.IsNullOrEmpty(commonDesktop)) searchRoots.Add(commonDesktop);
+                    string curStart = Environment.GetFolderPath(Environment.SpecialFolder.StartMenu);
+                    if (!string.IsNullOrEmpty(curStart)) searchRoots.Add(curStart);
+                    string commonStart = Environment.GetFolderPath(Environment.SpecialFolder.CommonStartMenu);
+                    if (!string.IsNullOrEmpty(commonStart)) searchRoots.Add(commonStart);
+                    string curProg = Environment.GetFolderPath(Environment.SpecialFolder.Programs);
+                    if (!string.IsNullOrEmpty(curProg)) searchRoots.Add(curProg);
+                    string commonProg = Environment.GetFolderPath(Environment.SpecialFolder.CommonPrograms);
+                    if (!string.IsNullOrEmpty(commonProg)) searchRoots.Add(commonProg);
+                }
+                catch { }
+
+                try
+                {
+                    string systemDrive = Path.GetPathRoot(Environment.SystemDirectory) ?? @"C:\";
+                    string usersDir = Path.Combine(systemDrive, "Users");
+                    if (Directory.Exists(usersDir))
+                    {
+                        foreach (var u in Directory.GetDirectories(usersDir))
+                        {
+                            var d = Path.Combine(u, "Desktop");
+                            var s = Path.Combine(u, "AppData", "Roaming", "Microsoft", "Windows", "Start Menu");
+                            if (Directory.Exists(d)) searchRoots.Add(d);
+                            if (Directory.Exists(s)) searchRoots.Add(s);
+                        }
+                    }
+                }
+                catch { }
+
+                foreach (var root in searchRoots.Distinct(StringComparer.OrdinalIgnoreCase))
+                {
+                    if (!Directory.Exists(root)) continue;
+                    try
+                    {
+                        foreach (var lnk in Directory.GetFiles(root, "*discord*.lnk", SearchOption.AllDirectories))
+                        {
+                            shortcutPaths.Add(lnk);
+                        }
+                    }
+                    catch { }
+                }
+
+                Type? shellType = Type.GetTypeFromProgID("WScript.Shell");
+                if (shellType == null) return;
+                dynamic shell = Activator.CreateInstance(shellType)!;
+
+                foreach (var lnkPath in shortcutPaths)
+                {
+                    try
+                    {
+                        dynamic shortcut = shell.CreateShortcut(lnkPath);
+                        string target = shortcut.TargetPath as string ?? "";
+                        string args = shortcut.Arguments as string ?? "";
+
+                        if (target.IndexOf("Discord", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                            target.IndexOf("Update.exe", StringComparison.OrdinalIgnoreCase) >= 0)
+                        {
+                            if (!args.Contains("--disable-quic", StringComparison.OrdinalIgnoreCase))
+                            {
+                                if (target.EndsWith("Update.exe", StringComparison.OrdinalIgnoreCase) || args.Contains("--processStart"))
+                                {
+                                    if (args.Contains("--process-start-args"))
+                                    {
+                                        shortcut.Arguments = args + " --disable-quic";
+                                    }
+                                    else
+                                    {
+                                        shortcut.Arguments = (args + " --process-start-args --disable-quic").Trim();
+                                    }
+                                }
+                                else
+                                {
+                                    shortcut.Arguments = (args + " --disable-quic").Trim();
+                                }
+                                shortcut.Save();
+                            }
+                        }
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+        }
+
+        // ═══════════════════════════════════════════════════════════
+        //  DISCORD BAŞLATMA YARDIMCISI (En Güncel Kurulu Sürümü Başlat)
+        // ═══════════════════════════════════════════════════════════
+        public static void LaunchDiscord()
+        {
+            try
+            {
+                EnsureDiscordShortcutsDisableQuic();
+
+                string systemDrive = Path.GetPathRoot(Environment.SystemDirectory) ?? @"C:\";
+                string usersDir = Path.Combine(systemDrive, "Users");
+                var allLocals = new List<string>();
+
+                try
+                {
+                    var curLocal = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                    if (!string.IsNullOrEmpty(curLocal)) allLocals.Add(curLocal);
+                }
+                catch { }
+
+                if (Directory.Exists(usersDir))
+                {
+                    foreach (var uDir in Directory.GetDirectories(usersDir))
+                    {
+                        var l = Path.Combine(uDir, "AppData", "Local");
+                        if (Directory.Exists(l) && !allLocals.Contains(l, StringComparer.OrdinalIgnoreCase))
+                        {
+                            allLocals.Add(l);
+                        }
+                    }
+                }
+
+                string? targetExe = null;
+                string? targetDir = null;
+
+                string[] clientFolders = { "Discord", "DiscordPTB", "DiscordCanary", "DiscordDevelopment", "Vesktop", "webcord", "ArmCord", "Legcord", "Ripcord" };
+
+                foreach (var l in allLocals)
+                {
+                    foreach (var client in clientFolders)
+                    {
+                        string[] candidateDirs = {
+                            Path.Combine(l, client),
+                            Path.Combine(l, "Programs", client)
+                        };
+
+                        foreach (var discDir in candidateDirs)
+                        {
+                            if (!Directory.Exists(discDir)) continue;
+
+                            // 1) Öncelik: Discord resmi Squirrel Update.exe başlatıcısı
+                            // app-* altındaki Discord.exe doğrudan başlatıldığında Squirrel kancası olmadığı için kapanabilir;
+                            // Update.exe üzerinden başlatmak hem pencereyi garantili açar hem de --disable-quic bayrağını korur.
+                            var updateExe = Path.Combine(discDir, "Update.exe");
+                            if (File.Exists(updateExe))
+                            {
+                                string targetClientExe = $"{client}.exe";
+                                var psiUpdate = new ProcessStartInfo
+                                {
+                                    FileName = updateExe,
+                                    Arguments = $"--processStart {targetClientExe} --process-start-args \"--disable-quic\"",
+                                    WorkingDirectory = discDir,
+                                    UseShellExecute = true
+                                };
+                                Process.Start(psiUpdate);
+                                return;
+                            }
+
+                            var appDirs = Directory.GetDirectories(discDir, "app-*")
+                                .OrderByDescending(d =>
+                                {
+                                    string folder = Path.GetFileName(d);
+                                    if (folder.StartsWith("app-", StringComparison.OrdinalIgnoreCase))
+                                        folder = folder.Substring(4);
+                                    return Version.TryParse(folder, out var v) ? v : new Version(0, 0, 0);
+                                })
+                                .ThenByDescending(d => d)
+                                .ToList();
+
+                            foreach (var ad in appDirs)
+                            {
+                                var exe = Path.Combine(ad, $"{client}.exe");
+                                if (!File.Exists(exe)) exe = Path.Combine(ad, "Discord.exe");
+                                if (File.Exists(exe))
+                                {
+                                    targetExe = exe;
+                                    targetDir = ad;
+                                    break;
+                                }
+                            }
+                            if (targetExe != null) break;
+
+                            var rootExe = Path.Combine(discDir, $"{client}.exe");
+                            if (!File.Exists(rootExe)) rootExe = Path.Combine(discDir, "Discord.exe");
+                            if (File.Exists(rootExe))
+                            {
+                                targetExe = rootExe;
+                                targetDir = discDir;
+                                break;
+                            }
+                        }
+                        if (targetExe != null) break;
+                    }
+                    if (targetExe != null) break;
+                }
+
+                // Fallback: Check Program Files and Program Files (x86)
+                if (string.IsNullOrEmpty(targetExe))
+                {
+                    string[] programFilesRoots = {
+                        Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                        Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86)
+                    };
+
+                    foreach (var pRoot in programFilesRoots)
+                    {
+                        if (string.IsNullOrEmpty(pRoot) || !Directory.Exists(pRoot)) continue;
+                        foreach (var client in clientFolders)
+                        {
+                            var dDir = Path.Combine(pRoot, client);
+                            if (!Directory.Exists(dDir)) continue;
+                            var exe = Path.Combine(dDir, $"{client}.exe");
+                            if (!File.Exists(exe)) exe = Path.Combine(dDir, "Discord.exe");
+                            if (File.Exists(exe))
+                            {
+                                targetExe = exe;
+                                targetDir = dDir;
+                                break;
+                            }
+                        }
+                        if (targetExe != null) break;
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(targetExe) && !string.IsNullOrEmpty(targetDir))
+                {
+                    var psi = new ProcessStartInfo
+                    {
+                        FileName = targetExe,
+                        Arguments = "--disable-quic",
+                        WorkingDirectory = targetDir,
+                        UseShellExecute = true
+                    };
+                    Process.Start(psi);
+                }
+            }
+            catch { }
+        }
+
+        // ═══════════════════════════════════════════════════════════
+        //  SESSİZ DİSCORD AĞ KORUMASI (AĞ KARTI GÜNCELLEME SONRASI DOĞRULAMA)
+        // ═══════════════════════════════════════════════════════════
+        public static void RepairDiscordNetworkStateSilent(bool triggerRestartIfRunning = false)
+        {
+            try
+            {
+                EnsureDiscordShortcutsDisableQuic();
+
+                bool wasRunning = IsDiscordRunning();
+                if (wasRunning && triggerRestartIfRunning)
+                {
+                    CloseDiscordProcesses();
+                    for (int i = 0; i < 20 && IsDiscordRunning(); i++)
+                    {
+                        System.Threading.Thread.Sleep(100);
+                    }
+                }
+
+                bool isCurrentlyRunning = IsDiscordRunning();
+
+                string systemDrive = Path.GetPathRoot(Environment.SystemDirectory) ?? @"C:\";
+                string usersDir = Path.Combine(systemDrive, "Users");
+                var userProfiles = new List<string>();
+
+                try
+                {
+                    var curRoaming = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+                    if (!string.IsNullOrEmpty(curRoaming)) userProfiles.Add(curRoaming);
+                }
+                catch { }
+
+                if (Directory.Exists(usersDir))
+                {
+                    foreach (var uDir in Directory.GetDirectories(usersDir))
+                    {
+                        string uName = Path.GetFileName(uDir);
+                        if (uName.Equals("Public", StringComparison.OrdinalIgnoreCase) ||
+                            uName.Equals("Default", StringComparison.OrdinalIgnoreCase) ||
+                            uName.Equals("All Users", StringComparison.OrdinalIgnoreCase) ||
+                            uName.Equals("Default User", StringComparison.OrdinalIgnoreCase))
+                            continue;
+
+                        string r = Path.Combine(uDir, "AppData", "Roaming");
+                        if (Directory.Exists(r) && !userProfiles.Contains(r, StringComparer.OrdinalIgnoreCase))
+                        {
+                            userProfiles.Add(r);
+                        }
+                    }
+                }
+
+                string[] discordDirs = { "discord", "discordptb", "discordcanary", "discorddevelopment", "vesktop", "webcord", "ArmCord", "Legcord", "Ripcord" };
+
+                foreach (var rDir in userProfiles)
+                {
+                    foreach (var d in discordDirs)
+                    {
+                        var fullDir = Path.Combine(rDir, d);
+                        if (!Directory.Exists(fullDir)) continue;
+
+                        // 1) QUIC'i settings.json içinde kalıcı olarak devre dışı bırak
+                        try
+                        {
+                            string settingsFile = Path.Combine(fullDir, "settings.json");
+                            JsonNode? rootNode = null;
+                            if (File.Exists(settingsFile))
+                            {
+                                try { rootNode = JsonNode.Parse(File.ReadAllText(settingsFile)); } catch { }
+                            }
+                            rootNode ??= new JsonObject();
+                            JsonObject switchesObj;
+                            if (rootNode["chromiumSwitches"] is JsonObject existingSwitches)
+                            {
+                                switchesObj = existingSwitches;
+                            }
+                            else
+                            {
+                                switchesObj = new JsonObject();
+                                rootNode["chromiumSwitches"] = switchesObj;
+                            }
+                            switchesObj["disable-quic"] = "true";
+                            File.WriteAllText(settingsFile, rootNode.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+                        }
+                        catch { }
+
+                        // 2) Ağ kartı geçişinde kilitlenen bozuk QUIC socket ve state dosyalarını sil
+                        // NOT: Eğer Discord çalışıyorsa kilitli dosyaları silmeye çalışma; yalnızca Discord kapalıyken sil!
+                        if (!isCurrentlyRunning)
+                        {
+                            var networkDir = Path.Combine(fullDir, "Network");
+                            if (Directory.Exists(networkDir))
+                            {
+                                string[] filesToClean = { 
+                                    "Network Persistent State", "Network Persistent State.tmp", 
+                                    "TransportSecurity", "Trust Tokens", "Trust Tokens-journal", 
+                                    "Reporting and NEL", "Reporting and NEL-journal" 
+                                };
+                                foreach (var f in filesToClean)
+                                {
+                                    SafeDeleteFile(Path.Combine(networkDir, f));
+                                }
+                                try
+                                {
+                                    foreach (var tmpFile in Directory.GetFiles(networkDir, "*.tmp"))
+                                    {
+                                        SafeDeleteFile(tmpFile);
+                                    }
+                                }
+                                catch { }
+                            }
+                        }
+                    }
+                }
+
+                if (wasRunning && triggerRestartIfRunning)
+                {
+                    LaunchDiscord();
+                }
+            }
+            catch { }
         }
 
         // ═══════════════════════════════════════════════════════════
@@ -1351,7 +1891,7 @@ PersistentKeepalive = 15
             _consecutiveFailures++;
             Debug.WriteLine($"[Watchdog] Tunnel check failed. Consecutive failures: {_consecutiveFailures}");
 
-            if (_consecutiveFailures >= 2)
+            if (_consecutiveFailures >= 3)
             {
                 _consecutiveFailures = 0;
                 _activeLogCallback?.Invoke("🔄 Tunnel Watchdog: CGNAT / hat kesintisi algılandı, tünel otomatik yenileniyor...");
@@ -1363,7 +1903,7 @@ PersistentKeepalive = 15
         {
             try
             {
-                using var cts = new CancellationTokenSource(4000);
+                using var cts = new CancellationTokenSource(7000);
                 // 1) Test Discord HTTPS through the tunnel
                 var resp = await _http.GetAsync("https://discord.com", cts.Token);
                 if (resp.IsSuccessStatusCode)
@@ -1375,7 +1915,7 @@ PersistentKeepalive = 15
 
             try
             {
-                using var cts2 = new CancellationTokenSource(3000);
+                using var cts2 = new CancellationTokenSource(5000);
                 // 2) Fallback test: Cloudflare 1.1.1.1 over HTTPS
                 var resp2 = await _http.GetAsync("https://1.1.1.1", cts2.Token);
                 if (resp2.IsSuccessStatusCode)
@@ -1387,7 +1927,7 @@ PersistentKeepalive = 15
 
             try
             {
-                using var cts3 = new CancellationTokenSource(2500);
+                using var cts3 = new CancellationTokenSource(4000);
                 var res = await System.Net.Dns.GetHostAddressesAsync("gateway.discord.gg", cts3.Token);
                 if (res != null && res.Length > 0) return true;
             }
@@ -1414,7 +1954,7 @@ PersistentKeepalive = 15
                 }
 
                 await ExecuteCommandAsync("net", "stop wiresock-client-service");
-                await Task.Delay(200);
+                await Task.Delay(600);
                 int startRes = await ExecuteCommandAsync("net", "start wiresock-client-service");
                 if (startRes != 0)
                 {

@@ -322,7 +322,8 @@
                             <Button x:Name="MenuBtnDashboard" Content="📊 Gösterge Paneli" HorizontalContentAlignment="Left" Padding="15,0,0,0" Height="45" Background="#1D2A35" Foreground="#00F2FE" FontWeight="Bold" BorderBrush="Transparent" Click="Menu_Click" Cursor="Hand" Margin="0,0,0,8" Style="{StaticResource FlatButtonStyle}"/>
                             <Button x:Name="MenuBtnTools" Content="🧰 Ağ Araçları" HorizontalContentAlignment="Left" Padding="15,0,0,0" Height="45" Background="Transparent" Foreground="#ADB5BD" FontWeight="Bold" BorderBrush="Transparent" Click="Menu_Click" Cursor="Hand" Margin="0,0,0,8" Style="{StaticResource FlatButtonStyle}"/>
                             <Button x:Name="MenuBtnWifi" Content="📡 Wi-Fi Analizörü" Visibility="Collapsed" HorizontalContentAlignment="Left" Padding="15,0,0,0" Height="45" Background="Transparent" Foreground="#ADB5BD" FontWeight="Bold" BorderBrush="Transparent" Click="Menu_Click" Cursor="Hand" Margin="0,0,0,8" Style="{StaticResource FlatButtonStyle}"/>
-                            <Button x:Name="MenuBtnGameMode" Content="🎮 Oyun Modu" HorizontalContentAlignment="Left" Padding="15,0,0,0" Height="45" Background="Transparent" Foreground="#ADB5BD" FontWeight="Bold" BorderBrush="Transparent" Click="Menu_Click" Cursor="Hand" Margin="0,0,0,8" Style="{StaticResource FlatButtonStyle}"/>
+                            <Button x:Name="MenuBtnDriverUpdate" Content="⚡ Sürücü Güncelle" HorizontalContentAlignment="Left" Padding="15,0,0,0" Height="45" Background="Transparent" Foreground="#ADB5BD" FontWeight="Bold" BorderBrush="Transparent" Click="Menu_Click" Cursor="Hand" Margin="0,0,0,8" Style="{StaticResource FlatButtonStyle}"/>
+                            <Button x:Name="MenuBtnGameMode" Visibility="Collapsed" Content="🎮 Oyun Modu" HorizontalContentAlignment="Left" Padding="15,0,0,0" Height="45" Background="Transparent" Foreground="#ADB5BD" FontWeight="Bold" BorderBrush="Transparent" Click="Menu_Click" Cursor="Hand" Margin="0,0,0,8" Style="{StaticResource FlatButtonStyle}"/>
                             <Button x:Name="MenuBtnReplay" Content="🎬 Oyun Kaydı" Visibility="Collapsed" HorizontalContentAlignment="Left" Padding="15,0,0,0" Height="45" Background="Transparent" Foreground="#ADB5BD" FontWeight="Bold" BorderBrush="Transparent" Click="Menu_Click" Cursor="Hand" Margin="0,0,0,8" Style="{StaticResource FlatButtonStyle}"/>
                             <Button x:Name="MenuBtnVoiceTranslation" Content="🎤 Sesli Çeviri" Visibility="Collapsed" HorizontalContentAlignment="Left" Padding="15,0,0,0" Height="45" Background="Transparent" Foreground="#ADB5BD" FontWeight="Bold" BorderBrush="Transparent" Click="Menu_Click" Cursor="Hand" Margin="0,0,0,8" Style="{StaticResource FlatButtonStyle}"/>
                             <Button x:Name="MenuBtnLicense" Content="🔑 Lisans &amp; Hesap" HorizontalContentAlignment="Left" Padding="15,0,0,0" Height="45" Background="Transparent" Foreground="#ADB5BD" FontWeight="Bold" BorderBrush="Transparent" Click="Menu_Click" Cursor="Hand" Margin="0,0,0,8" Style="{StaticResource FlatButtonStyle}"/>
@@ -954,6 +955,149 @@
                                             <TextBlock x:Name="LblGameOptimizationStatus" Text="" FontSize="11" Foreground="#00FF87" Margin="0,15,0,0" HorizontalAlignment="Center"/>
                                         </StackPanel>
                                     </Border>
+
+                                </StackPanel>
+
+                                                                <!-- PAGE DRIVER UPDATE -->
+                                <StackPanel x:Name="PageDriverUpdate" Visibility="Collapsed">
+
+                                    <!-- Top Overview & Control Banner -->
+                                    <Border Background="#1E2028" BorderBrush="#1C2F3D" BorderThickness="1" CornerRadius="16" Padding="25" Margin="0,0,0,20">
+                                        <StackPanel>
+                                            <Grid Margin="0,0,0,15">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel>
+                                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                                        <TextBlock Text="⚡" FontSize="22" Margin="0,0,8,0"/>
+                                                        <TextBlock Text="Sürücü Güncelleyici &amp; Yedekleme Merkezi" FontSize="18" FontWeight="Bold" Foreground="#F8F9FA" VerticalAlignment="Center"/>
+                                                    </StackPanel>
+                                                    <TextBlock Text="İşlemci, anakart, ekran kartı (GPU), Wi-Fi ve sistem donanımlarını tarar. Güncellemeler öncesi çalışan sürücüler otomatik yedeklenip 48 saat saklanır; olası sorunlarda tek tıkla geri yüklenebilir. BIOS donanım güvenliği için korunur." FontSize="12" Foreground="#ADB5BD" TextWrapping="Wrap"/>
+                                                </StackPanel>
+                                                <Border Grid.Column="1" x:Name="BadgeDriverHealth" Background="#2600FF87" CornerRadius="12" Padding="12,6" VerticalAlignment="Top" Margin="15,0,0,0">
+                                                    <TextBlock x:Name="TxtDriverHealthBadge" Text="HAZIR" Foreground="#00FF87" FontSize="11" FontWeight="Bold"/>
+                                                </Border>
+                                            </Grid>
+
+                                            <!-- Stat Counters Bar -->
+                                            <Grid Margin="0,5,0,18">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+
+                                                <!-- Stat 1: Total Devices -->
+                                                <Border Grid.Column="0" Background="#15171E" BorderBrush="#252833" BorderThickness="1" CornerRadius="10" Padding="12" Margin="0,0,6,0">
+                                                    <StackPanel>
+                                                        <TextBlock Text="TOPLAM DONANIM" FontSize="10" FontWeight="Bold" Foreground="#ADB5BD"/>
+                                                        <TextBlock x:Name="TxtStatTotalDrivers" Text="--" FontSize="18" FontWeight="Bold" Foreground="#F8F9FA" Margin="0,4,0,0"/>
+                                                    </StackPanel>
+                                                </Border>
+
+                                                <!-- Stat 2: Up To Date -->
+                                                <Border Grid.Column="1" Background="#15171E" BorderBrush="#252833" BorderThickness="1" CornerRadius="10" Padding="12" Margin="3,0,3,0">
+                                                    <StackPanel>
+                                                        <TextBlock Text="GÜNCEL SÜRÜCÜLER" FontSize="10" FontWeight="Bold" Foreground="#00FF87"/>
+                                                        <TextBlock x:Name="TxtStatUpToDate" Text="--" FontSize="18" FontWeight="Bold" Foreground="#00FF87" Margin="0,4,0,0"/>
+                                                    </StackPanel>
+                                                </Border>
+
+                                                <!-- Stat 3: Updates Available -->
+                                                <Border Grid.Column="2" Background="#15171E" BorderBrush="#252833" BorderThickness="1" CornerRadius="10" Padding="12" Margin="3,0,3,0">
+                                                    <StackPanel>
+                                                        <TextBlock Text="GÜNCELLEME MEVCUT" FontSize="10" FontWeight="Bold" Foreground="#00F2FE"/>
+                                                        <TextBlock x:Name="TxtStatUpdatesAvail" Text="--" FontSize="18" FontWeight="Bold" Foreground="#00F2FE" Margin="0,4,0,0"/>
+                                                    </StackPanel>
+                                                </Border>
+
+                                                <!-- Stat 4: Backups Ready -->
+                                                <Border Grid.Column="3" Background="#15171E" BorderBrush="#252833" BorderThickness="1" CornerRadius="10" Padding="12" Margin="6,0,0,0">
+                                                    <StackPanel>
+                                                        <TextBlock Text="48S YEDEK KORUMASI" FontSize="10" FontWeight="Bold" Foreground="#FF9900"/>
+                                                        <TextBlock x:Name="TxtStatBackupStatus" Text="AKTİF" FontSize="18" FontWeight="Bold" Foreground="#FF9900" Margin="0,4,0,0"/>
+                                                    </StackPanel>
+                                                </Border>
+                                            </Grid>
+
+                                            <!-- Progress Bar (Scanning / Updating) -->
+                                            <Border x:Name="PnlDriverProgress" Visibility="Collapsed" Background="#15171E" CornerRadius="10" Padding="14" Margin="0,0,0,15">
+                                                <StackPanel>
+                                                    <Grid Margin="0,0,0,6">
+                                                        <TextBlock x:Name="TxtDriverProgressStatus" Text="Sürücüler taranıyor..." FontSize="12" FontWeight="Bold" Foreground="#00F2FE"/>
+                                                        <TextBlock x:Name="TxtDriverProgressPct" Text="%0" FontSize="12" FontWeight="Bold" Foreground="#00FF87" HorizontalAlignment="Right"/>
+                                                    </Grid>
+                                                    <ProgressBar x:Name="DriverProgressBar" Height="8" Minimum="0" Maximum="100" Value="0" Background="#252833" Foreground="#00F2FE" BorderThickness="0"/>
+                                                </StackPanel>
+                                            </Border>
+
+                                            <!-- Action Buttons Row -->
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+
+                                                <Button x:Name="BtnScanDrivers" Grid.Column="0" Content="🔍 SÜRÜCÜLERİ TARA" Height="40" Padding="16,0" Background="#1D2A35" Foreground="#00F2FE" FontWeight="Bold" FontSize="12" BorderThickness="1" BorderBrush="#3300F2FE" Click="BtnScanDrivers_Click" Cursor="Hand" Margin="0,0,8,0" Style="{StaticResource FlatButtonStyle}"/>
+                                                <Button x:Name="BtnUpdateAllDrivers" Grid.Column="1" Content="⚡ TÜMÜNÜ GÜNCELLE" Height="40" Padding="16,0" Background="#667EEA" Foreground="#F8F9FA" FontWeight="Bold" FontSize="12" BorderThickness="0" Click="BtnUpdateAllDrivers_Click" Cursor="Hand" Margin="0,0,8,0" Style="{StaticResource FlatButtonStyle}"/>
+                                                <Button x:Name="BtnBackupAllDrivers" Grid.Column="2" Content="💾 TÜMÜNÜ YEDEKLE" Height="40" Padding="14,0" Background="#1E2028" Foreground="#FF9900" FontWeight="Bold" FontSize="12" BorderThickness="1" BorderBrush="#33FF9900" Click="BtnBackupAllDrivers_Click" Cursor="Hand" Margin="0,0,8,0" Style="{StaticResource FlatButtonStyle}"/>
+                                                
+                                                <Button x:Name="BtnToggleDriverHistory" Grid.Column="4" Content="📜 GÜNCELLEME GEÇMİŞİ &amp; GERİ YÜKLE" Height="40" Padding="14,0" Background="#1E2028" Foreground="#ADB5BD" FontWeight="Bold" FontSize="12" BorderThickness="1" BorderBrush="#252833" Click="BtnToggleDriverHistory_Click" Cursor="Hand" Style="{StaticResource FlatButtonStyle}"/>
+                                            </Grid>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <!-- Filter Navigation Tabs -->
+                                    <Border Background="#15171E" BorderBrush="#1F222B" BorderThickness="1" CornerRadius="12" Padding="6" Margin="0,0,0,15">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+
+                                            <Button x:Name="TabDriverAll" Grid.Column="0" Content="TÜM DONANIMLAR" Height="36" Background="#1D2A35" Foreground="#00F2FE" FontWeight="Bold" FontSize="11" BorderThickness="0" Cursor="Hand" Click="TabDriverFilter_Click" Style="{StaticResource FlatButtonStyle}"/>
+                                            <Button x:Name="TabDriverGpu" Grid.Column="1" Content="🎮 EKRAN KARTI (GPU)" Height="36" Background="Transparent" Foreground="#ADB5BD" FontWeight="Bold" FontSize="11" BorderThickness="0" Cursor="Hand" Click="TabDriverFilter_Click" Style="{StaticResource FlatButtonStyle}"/>
+                                            <Button x:Name="TabDriverCpuMb" Grid.Column="2" Content="🧠 İŞLEMCİ &amp; ANAKART (KORUMALI)" Height="36" Background="Transparent" Foreground="#ADB5BD" FontWeight="Bold" FontSize="11" BorderThickness="0" Cursor="Hand" Click="TabDriverFilter_Click" Style="{StaticResource FlatButtonStyle}"/>
+                                            <Button x:Name="TabDriverNet" Grid.Column="3" Content="📡 AĞ &amp; WI-FI" Height="36" Background="Transparent" Foreground="#ADB5BD" FontWeight="Bold" FontSize="11" BorderThickness="0" Cursor="Hand" Click="TabDriverFilter_Click" Style="{StaticResource FlatButtonStyle}"/>
+                                            <Button x:Name="TabDriverHistory" Grid.Column="4" Content="📜 GEÇMİŞ / GERİ YÜKLE" Height="36" Background="Transparent" Foreground="#ADB5BD" FontWeight="Bold" FontSize="11" BorderThickness="0" Cursor="Hand" Click="TabDriverFilter_Click" Style="{StaticResource FlatButtonStyle}"/>
+                                        </Grid>
+                                    </Border>
+
+                                    <!-- DRIVERS LIST CONTAINER -->
+                                    <StackPanel x:Name="PnlDriverCardsContainer">
+                                        <!-- Dynamic cards added here -->
+                                    </StackPanel>
+
+                                    <!-- DRIVER HISTORY / ROLLBACK CONTAINER -->
+                                    <StackPanel x:Name="PnlDriverHistoryContainer" Visibility="Collapsed">
+                                        <Border Background="#1E2028" BorderBrush="#1C2F3D" BorderThickness="1" CornerRadius="16" Padding="20" Margin="0,0,0,15">
+                                            <StackPanel>
+                                                <Grid Margin="0,0,0,10">
+                                                    <StackPanel>
+                                                        <TextBlock Text="📜 AlpNet Sürücü Güncelleme &amp; Geri Yükleme Geçmişi" FontSize="15" FontWeight="Bold" Foreground="#F8F9FA"/>
+                                                        <TextBlock Text="Yapılan tüm sürücü güncellemeleri burada saklanır. Herhangi bir performans düşüşü veya uyumsuzlukta tek tıkla eski sürücüye dönebilirsiniz." FontSize="11" Foreground="#ADB5BD"/>
+                                                    </StackPanel>
+                                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                                        <Button Content="📁 Yedek Klasörünü Aç" Height="32" Padding="12,0" Background="#1D2A35" Foreground="#00F2FE" FontWeight="Bold" FontSize="11" BorderThickness="0" Click="OpenBackupsFolder_Click" Cursor="Hand" Margin="0,0,8,0" Style="{StaticResource FlatButtonStyle}"/>
+                                                        <Button Content="🛡️ Windows Sistem Geri Yükleme (rstrui)" Height="32" Padding="12,0" Background="#26FF2E93" Foreground="#FF5CAA" FontWeight="Bold" FontSize="11" BorderThickness="0" Click="OpenSystemRestore_Click" Cursor="Hand" Style="{StaticResource FlatButtonStyle}"/>
+                                                    </StackPanel>
+                                                </Grid>
+                                                
+                                                <StackPanel x:Name="PnlDriverHistoryItems">
+                                                    <!-- Dynamic history items added here -->
+                                                </StackPanel>
+                                            </StackPanel>
+                                        </Border>
+                                    </StackPanel>
 
                                 </StackPanel>
 
