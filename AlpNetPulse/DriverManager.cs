@@ -114,7 +114,7 @@ namespace AlpNetPulse
             {
                 Timeout = TimeSpan.FromSeconds(20)
             };
-            _http.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 AlpNetPulse/2.3.3");
+            _http.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 AlpNetPulse/2.3.4");
 
             string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
             _driverDataDir = Path.Combine(localAppData, "AlpNet", "Drivers");

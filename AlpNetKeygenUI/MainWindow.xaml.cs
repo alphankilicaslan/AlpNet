@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
@@ -349,6 +349,120 @@ namespace AlpNetKeygenUI
             }
         }
 
+        private void ContextMenu_LiveGrantLicense_Click(object sender, RoutedEventArgs e)
+        {
+            if (LstLiveDevices.SelectedItem is ActiveDevice device)
+            {
+                var dummyBtn = new Button { Tag = device };
+                LiveGrantLicense_Click(dummyBtn, e);
+            }
+        }
+
+        private async void LiveGrantLicense_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is Button btn && btn.Tag is ActiveDevice device)
+            {
+                string targetHwid = device.Hwid?.Trim() ?? "";
+                if (string.IsNullOrEmpty(targetHwid)) return;
+
+                string userName = !string.IsNullOrWhiteSpace(device.UserName) && device.UserName != "-" ? device.UserName : "Canlı Cihaz";
+
+                var confirm = MessageBox.Show(
+                    $"Kullanıcı: {userName}\nHWID: {targetHwid}\n\nBu cihaza 100 Yıllık Süresiz Tam Lisans tanımlamak ve AlpNet bulutuna anında işlemek istiyor musunuz?",
+                    "Lisans Yetkisi Tanımla",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Question);
+
+                if (confirm != MessageBoxResult.Yes) return;
+
+                try
+                {
+                    btn.IsEnabled = false;
+                    btn.Content = "⏳...";
+
+                    // 100 yıllık HMAC lisansı üret
+                    long expTicks = DateTime.Now.AddHours(24 * 36500).Ticks;
+                    string payload = $"{targetHwid}|{expTicks}";
+                    string signature = ComputeHmacSha256(payload, SecretKey);
+                    string finalKey = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{payload}|{signature}"));
+
+                    // 1. Firebase /users/{hwid}.json güncelle
+                    string firebaseUrl = $"https://alpnet-d0bc4-default-rtdb.europe-west1.firebasedatabase.app/users/{targetHwid}.json?auth=ExNWZwF2CkByKFILhfQ2BbTpuxYFlFAUO8quWwfc";
+                    var data = new
+                    {
+                        license_key = finalKey,
+                        status = "Active",
+                        user_name = userName,
+                        updated_at = DateTime.UtcNow.ToString("o")
+                    };
+
+                    // 2. AlpTogether yetkisini de aç (/alptogether/users/{hwid})
+                    string atUrl = $"https://alpnet-d0bc4-default-rtdb.europe-west1.firebasedatabase.app/alptogether/users/{targetHwid}.json?auth=ExNWZwF2CkByKFILhfQ2BbTpuxYFlFAUO8quWwfc";
+                    var atData = new
+                    {
+                        hasPulseLicense = true,
+                        pulseLicenseKey = finalKey,
+                        adminAlias = userName,
+                        username = userName,
+                        appPermissions = new
+                        {
+                            alpnet_pulse = new
+                            {
+                                hasAccess = true,
+                                durationDays = 36500,
+                                expiresAt = "9999-12-31T23:59:59Z"
+                            }
+                        }
+                    };
+
+                    using (var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(10) })
+                    {
+                        var content = new System.Net.Http.StringContent(JsonSerializer.Serialize(data), Encoding.UTF8, "application/json");
+                        await client.PatchAsync(firebaseUrl, content);
+
+                        var atContent = new System.Net.Http.StringContent(JsonSerializer.Serialize(atData), Encoding.UTF8, "application/json");
+                        await client.PatchAsync(atUrl, atContent);
+                    }
+
+                    // Keygen geçmişine de ekle
+                    var historyItem = new LicenseHistoryItem
+                    {
+                        KeyString = finalKey,
+                        CreatedAt = DateTime.Now.ToString("dd.MM.yyyy HH:mm"),
+                        ExpiresAtTicks = expTicks,
+                        Note = userName + " (" + targetHwid + ")",
+                        Duration = "Süresiz (100 Yıl)",
+                        Price = 0
+                    };
+                    _history.Insert(0, historyItem);
+                    SaveHistory();
+
+                    device.LicenseKey = finalKey;
+                    device.Note = userName;
+                    device.Duration = "Süresiz";
+                    LstLiveDevices.Items.Refresh();
+
+                    TxtStatus.Text = $"{userName} için lisans yetkisi başarıyla verildi!";
+                    TxtStatus.Foreground = new SolidColorBrush(Color.FromRgb(0, 255, 135));
+
+                    MessageBox.Show(
+                        $"✅ {userName} ({targetHwid}) için Süresiz Lisans yetkisi başarıyla verildi ve buluta işlendi!\n\nKullanıcının uygulaması saniyeler içinde otomatik olarak açılacaktır.",
+                        "Yetki Verildi",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Information);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show("Lisans yetkisi verilirken hata oluştu: " + ex.Message, "Hata", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+                finally
+                {
+                    btn.IsEnabled = true;
+                    btn.Content = "⚡ Yetki Ver";
+                }
+            }
+        }
+
         private void ContextMenu_LiveCopyHwid_Click(object sender, RoutedEventArgs e)
         {
             if (LstLiveDevices.SelectedItem is ActiveDevice device)
@@ -363,7 +477,12 @@ namespace AlpNetKeygenUI
             if (sender is Button btn && btn.Tag is ActiveDevice device)
             {
                 Clipboard.SetText(device.Hwid);
-                TxtStatus.Text = "Cihaz HWID panoya kopyalandı!";
+                TxtHwid.Text = device.Hwid;
+                if (!string.IsNullOrWhiteSpace(device.UserName) && device.UserName != "-")
+                {
+                    TxtNote.Text = device.UserName;
+                }
+                TxtStatus.Text = "Cihaz HWID ve Bilgileri forma aktarıldı!";
                 TxtStatus.Foreground = new SolidColorBrush(Color.FromRgb(0, 242, 254));
             }
         }
@@ -622,6 +741,7 @@ namespace AlpNetKeygenUI
                                     var device = new ActiveDevice
                                     {
                                         Hwid = dto.hwid ?? kvp.Key,
+                                        UserName = !string.IsNullOrWhiteSpace(dto.user_name) ? dto.user_name : (!string.IsNullOrWhiteSpace(dto.pc_user) ? dto.pc_user : (!string.IsNullOrWhiteSpace(dto.machine_name) ? dto.machine_name : "-")),
                                         LicenseKey = dto.license_key ?? "-",
                                         Version = dto.version ?? "-",
                                     };
@@ -758,16 +878,23 @@ namespace AlpNetKeygenUI
                 try
                 {
                     string firebaseUrl = $"https://alpnet-d0bc4-default-rtdb.europe-west1.firebasedatabase.app/messages/{selectedDevice.Hwid}.json?auth=ExNWZwF2CkByKFILhfQ2BbTpuxYFlFAUO8quWwfc";
+                    string atNoticeUrl = $"https://alpnet-d0bc4-default-rtdb.europe-west1.firebasedatabase.app/alptogether/users/{selectedDevice.Hwid}/customNotice.json?auth=ExNWZwF2CkByKFILhfQ2BbTpuxYFlFAUO8quWwfc";
+
                     var contentObj = new { message = msg };
                     string json = JsonSerializer.Serialize(contentObj);
+                    string atJson = JsonSerializer.Serialize(msg);
 
                     using (var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(5) })
                     {
                         var content = new System.Net.Http.StringContent(json, Encoding.UTF8, "application/json");
-                        var response = await client.PutAsync(firebaseUrl, content);
-                        if (response.IsSuccessStatusCode)
+                        var atContent = new System.Net.Http.StringContent(atJson, Encoding.UTF8, "application/json");
+
+                        var r1 = await client.PutAsync(firebaseUrl, content);
+                        var r2 = await client.PutAsync(atNoticeUrl, atContent);
+
+                        if (r1.IsSuccessStatusCode || r2.IsSuccessStatusCode)
                         {
-                            TxtDirectMsgStatus.Text = "Mesaj Gönderildi!";
+                            TxtDirectMsgStatus.Text = "Not Yayınlandı!";
                             TxtDirectMsgStatus.Foreground = new SolidColorBrush(Color.FromRgb(0, 255, 135));
                             TxtDirectMsg.Text = "";
                             
@@ -789,6 +916,39 @@ namespace AlpNetKeygenUI
             else
             {
                 System.Windows.MessageBox.Show("Lütfen listeden mesaj göndermek istediğiniz cihazı seçin.", "Uyarı", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+
+        private async void ClearDirectMsg_Click(object sender, RoutedEventArgs e)
+        {
+            if (LstLiveDevices.SelectedItem is ActiveDevice selectedDevice)
+            {
+                try
+                {
+                    string firebaseUrl = $"https://alpnet-d0bc4-default-rtdb.europe-west1.firebasedatabase.app/messages/{selectedDevice.Hwid}.json?auth=ExNWZwF2CkByKFILhfQ2BbTpuxYFlFAUO8quWwfc";
+                    string atNoticeUrl = $"https://alpnet-d0bc4-default-rtdb.europe-west1.firebasedatabase.app/alptogether/users/{selectedDevice.Hwid}/customNotice.json?auth=ExNWZwF2CkByKFILhfQ2BbTpuxYFlFAUO8quWwfc";
+
+                    using (var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(5) })
+                    {
+                        await client.DeleteAsync(firebaseUrl);
+                        await client.DeleteAsync(atNoticeUrl);
+
+                        TxtDirectMsgStatus.Text = "Not Kaldırıldı!";
+                        TxtDirectMsgStatus.Foreground = new SolidColorBrush(Color.FromRgb(255, 60, 48));
+                        TxtDirectMsg.Text = "";
+
+                        _ = Task.Run(async () =>
+                        {
+                            await Task.Delay(3000);
+                            Dispatcher.Invoke(() => TxtDirectMsgStatus.Text = "");
+                        });
+                    }
+                }
+                catch { }
+            }
+            else
+            {
+                System.Windows.MessageBox.Show("Lütfen notunu kaldırmak istediğiniz cihazı seçin.", "Uyarı", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
         }
 
@@ -848,11 +1008,15 @@ namespace AlpNetKeygenUI
         public string license_key { get; set; }
         public string last_seen { get; set; }
         public string version { get; set; }
+        public string user_name { get; set; }
+        public string pc_user { get; set; }
+        public string machine_name { get; set; }
     }
 
     public class ActiveDevice
     {
         public string Hwid { get; set; } = "";
+        public string UserName { get; set; } = "-";
         public string LicenseKey { get; set; } = "";
         public string Note { get; set; } = "";
         public string Duration { get; set; } = "";
