@@ -114,7 +114,7 @@ namespace AlpNetPulse
             {
                 Timeout = TimeSpan.FromSeconds(20)
             };
-            _http.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 AlpNetPulse/2.3.5");
+            _http.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 AlpNetPulse/2.3.6");
 
             string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
             _driverDataDir = Path.Combine(localAppData, "AlpNet", "Drivers");
@@ -644,7 +644,8 @@ namespace AlpNetPulse
             var list = new List<DriverInfo>();
             try
             {
-                using var searcher = new ManagementObjectSearcher("SELECT DeviceName, DriverVersion, DriverDate, Manufacturer, InfName, HardWareID, DeviceClass FROM Win32_PnPSignedDriver WHERE DeviceClass = 'NET' OR DeviceClass = 'BLUETOOTH'");
+                bool isWin11 = Environment.OSVersion.Version.Build >= 22000;
+                using var searcher = new ManagementObjectSearcher("SELECT DeviceName, DriverVersion, DriverDate, Manufacturer, InfName, HardWareID, DeviceID, DeviceClass FROM Win32_PnPSignedDriver WHERE DeviceClass = 'NET' OR DeviceClass = 'BLUETOOTH'");
                 foreach (ManagementObject obj in searcher.Get().Cast<ManagementObject>())
                 {
                     string name = obj["DeviceName"]?.ToString()?.Trim() ?? "";
@@ -652,6 +653,7 @@ namespace AlpNetPulse
                     string date = FormatDriverDate(obj["DriverDate"]?.ToString());
                     string mfg = obj["Manufacturer"]?.ToString()?.Trim() ?? "Ağ Üreticisi";
                     string inf = obj["InfName"]?.ToString()?.Trim() ?? "";
+                    string hwId = ExtractPrimaryHardwareId(obj["HardWareID"], obj["DeviceID"]);
 
                     // Sanal ve miniport adaptörleri filtrele (Sadece gerçek Wi-Fi, Ethernet ve Bluetooth)
                     if (string.IsNullOrWhiteSpace(name)) continue;
@@ -675,31 +677,67 @@ namespace AlpNetPulse
                     if (!isWifi && !isEthernet && !isBluetooth && !name.Contains("Intel", StringComparison.OrdinalIgnoreCase))
                         continue;
 
-                    // Wi-Fi için çevrimiçi en güncel sürücü önerisi
+                    // Çevrimiçi Microsoft Update Catalog WHQL sürücü eşleştirmesi
                     string latestVer = ver;
                     string latestDate = date;
+                    string downloadUrl = "";
+                    string downloadSize = "";
                     bool updateAvail = false;
 
-                    if (isWifi && name.Contains("Intel", StringComparison.OrdinalIgnoreCase))
+                    if (isWifi && (hwId.Contains("VEN_8086", StringComparison.OrdinalIgnoreCase) || name.Contains("Intel", StringComparison.OrdinalIgnoreCase)))
                     {
-                        // Intel Wi-Fi için son WHQL sürümü
-                        string targetVer = "24.10.0.4";
+                        string targetVer = "23.80.1.3";
                         if (IsNewerVersion(targetVer, ver))
                         {
                             latestVer = targetVer;
-                            latestDate = "Kasım 2025 (Intel WHQL)";
+                            latestDate = "Eylül 2024 (Intel WHQL)";
+                            downloadUrl = "https://catalog.s.download.windowsupdate.com/c/msdownload/update/driver/drvs/2024/11/6bc5d530-eaab-4a41-84f2-976acac264bb_4f5c1ae85e90bbea2d31fbd89666c1771a7d14e5.cab";
+                            downloadSize = "18.8 MB (WHQL CAB)";
                             updateAvail = true;
                         }
                     }
-                    else if (isEthernet && name.Contains("Realtek", StringComparison.OrdinalIgnoreCase))
+                    else if (isEthernet && (hwId.Contains("DEV_8125", StringComparison.OrdinalIgnoreCase) ||
+                             (name.Contains("Realtek", StringComparison.OrdinalIgnoreCase) && (name.Contains("2.5G", StringComparison.OrdinalIgnoreCase) || name.Contains("2.5GbE", StringComparison.OrdinalIgnoreCase)))))
                     {
-                        // Realtek PCIe GbE son sürücüsü
-                        string targetVer = "1168.16.1123.2024";
-                        if (IsNewerVersion(targetVer, ver))
+                        if (isWin11)
                         {
-                            latestVer = targetVer;
-                            latestDate = "Son WHQL";
-                            updateAvail = true;
+                            string targetVer = "1125.22.1118.2024";
+                            if (IsNewerVersion(targetVer, ver))
+                            {
+                                latestVer = targetVer;
+                                latestDate = "Kasım 2024 (WHQL)";
+                                downloadUrl = "https://catalog.s.download.windowsupdate.com/d/msdownload/update/driver/drvs/2025/04/86048b97-a84b-4e48-a284-f9a7a02df087_16c10552f57b8914f796603632683b1be8c25480.cab";
+                                downloadSize = "304 KB (WHQL CAB)";
+                                updateAvail = true;
+                            }
+                        }
+                    }
+                    else if (isEthernet && (hwId.Contains("DEV_8168", StringComparison.OrdinalIgnoreCase) ||
+                             (name.Contains("Realtek", StringComparison.OrdinalIgnoreCase) && !name.Contains("2.5G", StringComparison.OrdinalIgnoreCase) && !name.Contains("2.5GbE", StringComparison.OrdinalIgnoreCase))))
+                    {
+                        if (isWin11)
+                        {
+                            string targetVer = "1168.22.1118.2024";
+                            if (IsNewerVersion(targetVer, ver))
+                            {
+                                latestVer = targetVer;
+                                latestDate = "Kasım 2024 (WHQL)";
+                                downloadUrl = "https://catalog.s.download.windowsupdate.com/d/msdownload/update/driver/drvs/2025/04/2d775acc-14fe-4db0-885b-c9f25f0f2cb6_5ae4931374eb83c59e79d21fda1855229dd3c8bc.cab";
+                                downloadSize = "339 KB (WHQL CAB)";
+                                updateAvail = true;
+                            }
+                        }
+                        else
+                        {
+                            string targetVer = "10.79.50.1003";
+                            if (IsNewerVersion(targetVer, ver))
+                            {
+                                latestVer = targetVer;
+                                latestDate = "Ekim 2025 (Win10 WHQL)";
+                                downloadUrl = "https://catalog.s.download.windowsupdate.com/d/msdownload/update/driver/drvs/2026/01/16270d4d-ca9d-4fb6-a0f4-e4354f3f98bb_63e362b5d90631a42779ff2986cd9e92eb2dc96f.cab";
+                                downloadSize = "584 KB (WHQL CAB)";
+                                updateAvail = true;
+                            }
                         }
                     }
 
@@ -717,7 +755,10 @@ namespace AlpNetPulse
                         CurrentDateStr = date,
                         LatestVersion = latestVer,
                         LatestDateStr = latestDate,
+                        DownloadUrl = downloadUrl,
+                        DownloadSize = downloadSize,
                         InfName = inf,
+                        HardwareId = hwId,
                         IsUpdateAvailable = updateAvail,
                         Status = updateAvail ? DriverStatus.UpdateAvailable : DriverStatus.UpToDate,
                         StatusBadgeText = updateAvail ? $"⚡ YENİ GÜNCELLEME: v{latestVer}" : "✔ GÜNCEL",
@@ -813,13 +854,22 @@ namespace AlpNetPulse
                             // 4. Kesin sürüm karşılaştırması: Yeni sürüm mevcut sürümden BÜYÜKSE ve EŞİT DEĞİLSE güncelleme işaretle
                             if (!string.IsNullOrEmpty(extractedVer) && IsNewerVersion(extractedVer, matched.CurrentVersion) && !string.Equals(extractedVer, matched.CurrentVersion, StringComparison.OrdinalIgnoreCase))
                             {
-                                matched.LatestVersion = extractedVer;
-                                matched.IsUpdateAvailable = true;
-                                matched.Status = DriverStatus.UpdateAvailable;
-                                matched.StatusBadgeText = "⚡ WHQL GÜNCELLEME MEVCUT";
-                                matched.StatusColorHex = "#00F2FE";
-                                matched.ReleaseNotes = title;
-                                matched.WindowsUpdateTitle = title;
+                                bool isNewerThanCatalog = IsNewerVersion(extractedVer, matched.LatestVersion);
+                                if (string.IsNullOrEmpty(matched.DownloadUrl) || isNewerThanCatalog)
+                                {
+                                    if (isNewerThanCatalog && !string.IsNullOrEmpty(matched.DownloadUrl))
+                                    {
+                                        matched.DownloadUrl = "";
+                                        matched.DownloadSize = "Windows WHQL";
+                                    }
+                                    matched.LatestVersion = extractedVer;
+                                    matched.IsUpdateAvailable = true;
+                                    matched.Status = DriverStatus.UpdateAvailable;
+                                    matched.StatusBadgeText = "⚡ WHQL GÜNCELLEME MEVCUT";
+                                    matched.StatusColorHex = "#00F2FE";
+                                    matched.ReleaseNotes = title;
+                                    matched.WindowsUpdateTitle = title;
+                                }
                             }
                         }
                     }
@@ -918,22 +968,52 @@ namespace AlpNetPulse
             }
             else if (driver.Category == DriverCategory.Network)
             {
-                // AĞ KARTLARI (Wi-Fi / Ethernet / Bluetooth): %100 Gerçek İndirme ve Güvenli Kurulum
+                // AĞ KARTLARI (Wi-Fi / Ethernet / Bluetooth): %100 Gerçek İndirme ve Güvenli WHQL CAB/INF Kurulumu
                 progressCallback?.Invoke(35, "Ağ kartı kurulum paketi hazırlanıyor...");
                 string cacheDir = Path.Combine(_driverDataDir, "Cache");
                 if (!Directory.Exists(cacheDir)) Directory.CreateDirectory(cacheDir);
 
-                if (!string.IsNullOrEmpty(driver.DownloadUrl))
+                string failReason = "";
+
+                if (string.IsNullOrEmpty(driver.DownloadUrl))
                 {
-                    string installerPath = Path.Combine(cacheDir, $"{safeName}_v{driver.LatestVersion}.exe");
+                    if (!string.IsNullOrEmpty(driver.WindowsUpdateTitle))
+                    {
+                        progressCallback?.Invoke(45, "Windows Update WHQL sürücü deposundan paket indiriliyor ve yükleniyor...");
+                        var wuRes = await InstallWindowsUpdateDriverAsync(driver.WindowsUpdateTitle, progressCallback);
+                        installAttempted = wuRes.Success;
+                        if (!wuRes.Success)
+                        {
+                            failReason = wuRes.Message;
+                            AlpNetTelemetryService.Instance.Warn("DRIVER", $"Windows Update kurulum sonucu: {wuRes.Message}");
+                        }
+                    }
+
+                    if (!installAttempted)
+                    {
+                        progressCallback?.Invoke(42, "Microsoft Update Catalog üzerinden WHQL paketi aranıyor...");
+                        string? catalogUrl = await ResolveMicrosoftCatalogCabUrlAsync(driver);
+                        if (!string.IsNullOrEmpty(catalogUrl))
+                        {
+                            driver.DownloadUrl = catalogUrl;
+                        }
+                    }
+                }
+
+                if (!installAttempted && !string.IsNullOrEmpty(driver.DownloadUrl))
+                {
+                    bool isCabPackage = driver.DownloadUrl.Contains(".cab", StringComparison.OrdinalIgnoreCase);
+                    string ext = isCabPackage ? ".cab" : ".exe";
+                    string installerPath = Path.Combine(cacheDir, $"{safeName}_v{driver.LatestVersion}{ext}");
+
                     progressCallback?.Invoke(40, "Ağ sürücüsü çevrimdışı yerel belleğe indiriliyor...");
                     bool downloaded = await DownloadFileWithProgressAsync(driver.DownloadUrl, installerPath, (pct) =>
                     {
-                        int scaled = 40 + (int)(pct * 0.45);
+                        int scaled = 40 + (int)(pct * 0.35);
                         progressCallback?.Invoke(scaled, $"Paket İndiriliyor: %{pct}");
                     });
 
-                    if (!downloaded || !File.Exists(installerPath) || new FileInfo(installerPath).Length == 0)
+                    if (!downloaded || !File.Exists(installerPath) || new FileInfo(installerPath).Length < 1024)
                     {
                         await AlpNetTelemetryService.Instance.RecordDriverUpdateTelemetryAsync(new DriverUpdateTelemetryRecord
                         {
@@ -951,40 +1031,63 @@ namespace AlpNetPulse
                         return (false, "Ağ sürücüsü indirme paketi tamamlanamadı. İnternet kesintisi durumunda kilitlenmeyi önlemek için kuruluma başlanmadı.");
                     }
 
-                    progressCallback?.Invoke(80, "Paket indirildi ve doğrulandı. Sessiz kurulum yürütülüyor...");
-                    try
+                    if (isCabPackage)
                     {
-                        var psi = new ProcessStartInfo
+                        var cabRes = await InstallCabDriverPackageAsync(installerPath, driver, progressCallback);
+                        installAttempted = cabRes.Success;
+                        if (!cabRes.Success)
                         {
-                            FileName = installerPath,
-                            Arguments = "/s /qn /quiet /norestart",
-                            UseShellExecute = true,
-                            Verb = "runas"
-                        };
-                        var proc = Process.Start(psi);
-                        if (proc != null) await proc.WaitForExitAsync();
-                        installAttempted = true;
+                            failReason = cabRes.Message;
+                        }
                     }
-                    catch
+                    else
                     {
-                        var proc = Process.Start(new ProcessStartInfo(installerPath) { UseShellExecute = true });
-                        if (proc != null) await proc.WaitForExitAsync();
-                        installAttempted = true;
+                        progressCallback?.Invoke(80, "Paket indirildi ve doğrulandı. Sessiz kurulum yürütülüyor...");
+                        try
+                        {
+                            var psi = new ProcessStartInfo
+                            {
+                                FileName = installerPath,
+                                Arguments = "/s /qn /quiet /norestart",
+                                UseShellExecute = true,
+                                Verb = "runas"
+                            };
+                            var proc = Process.Start(psi);
+                            if (proc != null) await proc.WaitForExitAsync();
+                            installAttempted = true;
+                        }
+                        catch
+                        {
+                            var proc = Process.Start(new ProcessStartInfo(installerPath) { UseShellExecute = true });
+                            if (proc != null) await proc.WaitForExitAsync();
+                            installAttempted = true;
+                        }
                     }
                 }
-                else
+
+                if (!installAttempted)
                 {
-                    // DownloadUrl boşsa Windows Update COM Installer üzerinden gerçek WHQL sürücüsünü kur
-                    progressCallback?.Invoke(45, "Windows Update WHQL sürücü deposundan paket indiriliyor ve yükleniyor...");
-                    string targetTitle = !string.IsNullOrEmpty(driver.WindowsUpdateTitle) ? driver.WindowsUpdateTitle : driver.Name;
-                    var wuRes = await InstallWindowsUpdateDriverAsync(targetTitle, progressCallback);
-                    if (!wuRes.Success)
+                    string reason = string.IsNullOrWhiteSpace(failReason)
+                        ? "Microsoft Update Catalog ve Windows Update üzerinde uygun WHQL kurulum paketi bulunamadı."
+                        : failReason;
+
+                    await AlpNetTelemetryService.Instance.RecordDriverUpdateTelemetryAsync(new DriverUpdateTelemetryRecord
                     {
-                        AlpNetTelemetryService.Instance.Warn("DRIVER", $"Windows Update kurulum sonucu: {wuRes.Message}");
-                    }
-                    installAttempted = wuRes.Success;
-                    await TriggerDeviceUpdateAsync(driver.HardwareId);
+                        UpdateId = "UPD-" + DateTime.Now.ToString("MMddHHmmss"),
+                        Timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                        DeviceName = driver.Name,
+                        Category = driver.CategoryBadgeText,
+                        OldVersion = originalOldVersion,
+                        NewVersion = driver.LatestVersion,
+                        Status = "Hata",
+                        Verified = false,
+                        BackupPath = backupFolder,
+                        Notes = reason
+                    });
+                    return (false, $"{driver.Name} güncellenemedi: {reason}");
                 }
+
+                await TriggerDeviceUpdateAsync(driver.HardwareId);
 
                 // Doğrulama & Otomatik Ağ Stabilizasyonu
                 progressCallback?.Invoke(88, "Ağ bağdaştırıcısı bağlantı ve güvenlik protokolleri stabilize ediliyor...");
@@ -992,12 +1095,51 @@ namespace AlpNetPulse
             }
             else
             {
-                // Diğer Donanımlar (İşlemci/Çipset/Ses) - Gerçek Windows Update WHQL kurulumu
-                if (!string.IsNullOrEmpty(driver.DownloadUrl))
+                // Diğer Donanımlar (İşlemci/Çipset/Ses) - Gerçek Windows Update WHQL veya Microsoft Catalog CAB kurulumu
+                if (string.IsNullOrEmpty(driver.DownloadUrl) && !string.IsNullOrEmpty(driver.WindowsUpdateTitle))
+                {
+                    progressCallback?.Invoke(50, "Windows Update WHQL paket kurulumu yürütülüyor...");
+                    var wuRes = await InstallWindowsUpdateDriverAsync(driver.WindowsUpdateTitle, progressCallback);
+                    installAttempted = wuRes.Success;
+                    if (!installAttempted)
+                    {
+                        string? catalogUrl = await ResolveMicrosoftCatalogCabUrlAsync(driver);
+                        if (!string.IsNullOrEmpty(catalogUrl))
+                        {
+                            driver.DownloadUrl = catalogUrl;
+                        }
+                        else
+                        {
+                            await AlpNetTelemetryService.Instance.RecordDriverUpdateTelemetryAsync(new DriverUpdateTelemetryRecord
+                            {
+                                UpdateId = "UPD-" + DateTime.Now.ToString("MMddHHmmss"),
+                                Timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                                DeviceName = driver.Name,
+                                Category = driver.CategoryBadgeText,
+                                OldVersion = originalOldVersion,
+                                NewVersion = driver.LatestVersion,
+                                Status = "Hata",
+                                Verified = false,
+                                BackupPath = backupFolder,
+                                Notes = $"Windows Update sürücü kurulumu başarısız oldu: {wuRes.Message}"
+                            });
+                            return (false, $"Windows Update sürücü kurulumu başarısız oldu: {wuRes.Message}");
+                        }
+                    }
+                    else
+                    {
+                        await TriggerDeviceUpdateAsync(driver.HardwareId);
+                    }
+                }
+
+                if (!installAttempted && !string.IsNullOrEmpty(driver.DownloadUrl))
                 {
                     string tempDir = Path.Combine(Path.GetTempPath(), "AlpNetDriverSetup");
                     if (!Directory.Exists(tempDir)) Directory.CreateDirectory(tempDir);
-                    string installerPath = Path.Combine(tempDir, $"{safeName}_v{driver.LatestVersion}.exe");
+                    bool isCabPackage = driver.DownloadUrl.Contains(".cab", StringComparison.OrdinalIgnoreCase);
+                    string ext = isCabPackage ? ".cab" : ".exe";
+                    string installerPath = Path.Combine(tempDir, $"{safeName}_v{driver.LatestVersion}{ext}");
+
                     bool downloaded = await DownloadFileWithProgressAsync(driver.DownloadUrl, installerPath, null);
                     if (!downloaded || !File.Exists(installerPath))
                     {
@@ -1017,47 +1159,35 @@ namespace AlpNetPulse
                         return (false, "Sürücü paketi indirilemedi. Lütfen internet bağlantınızı kontrol edin.");
                     }
 
-                    try
+                    if (isCabPackage)
                     {
-                        var proc = Process.Start(new ProcessStartInfo(installerPath) { UseShellExecute = true, Arguments = "/s /qn /quiet" });
-                        if (proc != null) await proc.WaitForExitAsync();
-                        installAttempted = true;
-                    }
-                    catch (Exception ex)
-                    {
-                        AlpNetTelemetryService.Instance.Warn("DRIVER", $"Sürücü kurulum başlatma hatası: {ex.Message}");
-                    }
-                }
-                else
-                {
-                    progressCallback?.Invoke(50, "Windows Update WHQL paket kurulumu yürütülüyor...");
-                    string targetTitle = !string.IsNullOrEmpty(driver.WindowsUpdateTitle) ? driver.WindowsUpdateTitle : driver.Name;
-                    var wuRes = await InstallWindowsUpdateDriverAsync(targetTitle, progressCallback);
-                    installAttempted = wuRes.Success;
-                    if (!installAttempted)
-                    {
-                        await AlpNetTelemetryService.Instance.RecordDriverUpdateTelemetryAsync(new DriverUpdateTelemetryRecord
+                        var cabRes = await InstallCabDriverPackageAsync(installerPath, driver, progressCallback);
+                        installAttempted = cabRes.Success;
+                        if (!cabRes.Success)
                         {
-                            UpdateId = "UPD-" + DateTime.Now.ToString("MMddHHmmss"),
-                            Timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
-                            DeviceName = driver.Name,
-                            Category = driver.CategoryBadgeText,
-                            OldVersion = originalOldVersion,
-                            NewVersion = driver.LatestVersion,
-                            Status = "Hata",
-                            Verified = false,
-                            BackupPath = backupFolder,
-                            Notes = $"Windows Update sürücü kurulumu başarısız oldu: {wuRes.Message}"
-                        });
-                        return (false, $"Windows Update sürücü kurulumu başarısız oldu: {wuRes.Message}");
+                            return (false, $"{driver.Name} güncellenemedi: {cabRes.Message}");
+                        }
+                        await TriggerDeviceUpdateAsync(driver.HardwareId);
                     }
-                    await TriggerDeviceUpdateAsync(driver.HardwareId);
+                    else
+                    {
+                        try
+                        {
+                            var proc = Process.Start(new ProcessStartInfo(installerPath) { UseShellExecute = true, Arguments = "/s /qn /quiet" });
+                            if (proc != null) await proc.WaitForExitAsync();
+                            installAttempted = true;
+                        }
+                        catch (Exception ex)
+                        {
+                            AlpNetTelemetryService.Instance.Warn("DRIVER", $"Sürücü kurulum başlatma hatası: {ex.Message}");
+                        }
+                    }
                 }
             }
 
             // CRITICAL: Kurulum sonrası WMI üzerinden fiziksel aygıt sürücü sürümünü doğrula!
             progressCallback?.Invoke(95, "Fiziksel donanım sürücüsü doğrulanıyor...");
-            string verifiedVer = GetPhysicalDriverVersion(driver);
+            string verifiedVer = await WaitForUpdatedPhysicalVersionAsync(driver, originalOldVersion);
 
             if (!string.IsNullOrEmpty(verifiedVer))
             {
@@ -1536,27 +1666,51 @@ namespace AlpNetPulse
                 }
                 else
                 {
-                    using var searcher = new ManagementObjectSearcher("SELECT DeviceName, DriverVersion, HardWareID, InfName FROM Win32_PnPSignedDriver");
+                    string query = driver.Category == DriverCategory.Network
+                        ? "SELECT DeviceName, DriverVersion, HardWareID, DeviceID, InfName FROM Win32_PnPSignedDriver WHERE DeviceClass = 'NET' OR DeviceClass = 'BLUETOOTH'"
+                        : "SELECT DeviceName, DriverVersion, HardWareID, DeviceID, InfName FROM Win32_PnPSignedDriver";
+
+                    string targetVenDev = ExtractVendorDeviceKey(driver.HardwareId);
+                    string fallbackNameVer = string.Empty;
+
+                    using var searcher = new ManagementObjectSearcher(query);
                     foreach (ManagementObject obj in searcher.Get().Cast<ManagementObject>())
                     {
                         string dName = obj["DeviceName"]?.ToString()?.Trim() ?? "";
-                        string hwId = obj["HardWareID"]?.ToString()?.Trim() ?? "";
+                        string hwId = ExtractPrimaryHardwareId(obj["HardWareID"], obj["DeviceID"]);
                         string inf = obj["InfName"]?.ToString()?.Trim() ?? "";
+                        string ver = obj["DriverVersion"]?.ToString()?.Trim() ?? "";
+                        if (string.IsNullOrEmpty(ver)) continue;
 
-                        bool match = false;
                         if (!string.IsNullOrEmpty(driver.HardwareId) && hwId.Equals(driver.HardwareId, StringComparison.OrdinalIgnoreCase))
-                            match = true;
-                        else if (!string.IsNullOrEmpty(driver.InfName) && inf.Equals(driver.InfName, StringComparison.OrdinalIgnoreCase))
-                            match = true;
-                        else if (!string.IsNullOrEmpty(dName) && (driver.Name.Contains(dName, StringComparison.OrdinalIgnoreCase) || dName.Contains(driver.Name, StringComparison.OrdinalIgnoreCase)))
-                            match = true;
-
-                        if (match)
                         {
-                            string ver = obj["DriverVersion"]?.ToString()?.Trim() ?? "";
-                            if (!string.IsNullOrEmpty(ver)) return ver;
+                            if (!string.IsNullOrEmpty(inf)) driver.InfName = inf;
+                            return ver;
+                        }
+
+                        if (!string.IsNullOrEmpty(targetVenDev) && hwId.Contains(targetVenDev, StringComparison.OrdinalIgnoreCase))
+                        {
+                            if (string.IsNullOrEmpty(dName) || driver.Name.Contains(dName, StringComparison.OrdinalIgnoreCase) || dName.Contains(driver.Name, StringComparison.OrdinalIgnoreCase))
+                            {
+                                if (!string.IsNullOrEmpty(inf)) driver.InfName = inf;
+                                return ver;
+                            }
+                            if (string.IsNullOrEmpty(fallbackNameVer))
+                                fallbackNameVer = ver;
+                        }
+
+                        if (string.IsNullOrEmpty(fallbackNameVer) && !string.IsNullOrEmpty(dName) &&
+                            (driver.Name.Equals(dName, StringComparison.OrdinalIgnoreCase) ||
+                             driver.Name.Contains(dName, StringComparison.OrdinalIgnoreCase) ||
+                             dName.Contains(driver.Name, StringComparison.OrdinalIgnoreCase)))
+                        {
+                            fallbackNameVer = ver;
+                            if (!string.IsNullOrEmpty(inf)) driver.InfName = inf;
                         }
                     }
+
+                    if (!string.IsNullOrEmpty(fallbackNameVer))
+                        return fallbackNameVer;
                 }
             }
             catch (Exception ex)
@@ -1564,6 +1718,202 @@ namespace AlpNetPulse
                 AlpNetTelemetryService.Instance.Warn("DRIVER", $"Fiziksel sürücü sürümü sorgulanamadı: {ex.Message}");
             }
             return string.Empty;
+        }
+
+        private async Task<string> WaitForUpdatedPhysicalVersionAsync(DriverInfo driver, string oldVersion)
+        {
+            string lastVer = string.Empty;
+            for (int attempt = 0; attempt < 6; attempt++)
+            {
+                lastVer = GetPhysicalDriverVersion(driver);
+                if (!string.IsNullOrEmpty(lastVer) && IsNewerVersion(lastVer, oldVersion))
+                {
+                    return lastVer;
+                }
+                if (attempt < 5)
+                {
+                    await Task.Delay(1000);
+                }
+            }
+            return lastVer;
+        }
+
+        private static string ExtractPrimaryHardwareId(object? rawHwId, object? rawDeviceId = null)
+        {
+            if (rawHwId is string s && !string.IsNullOrWhiteSpace(s))
+                return s.Trim();
+            if (rawHwId is string[] arr && arr.Length > 0)
+            {
+                var first = arr.FirstOrDefault(x => !string.IsNullOrWhiteSpace(x));
+                if (!string.IsNullOrWhiteSpace(first)) return first.Trim();
+            }
+            if (rawDeviceId is string devId && !string.IsNullOrWhiteSpace(devId))
+                return devId.Trim();
+            return string.Empty;
+        }
+
+        private static string ExtractVendorDeviceKey(string? hardwareId)
+        {
+            if (string.IsNullOrWhiteSpace(hardwareId)) return string.Empty;
+            var match = Regex.Match(hardwareId, @"(PCI|USB)\\VEN_[0-9A-F]{4}&DEV_[0-9A-F]{4}", RegexOptions.IgnoreCase);
+            if (match.Success) return match.Value;
+            var usbMatch = Regex.Match(hardwareId, @"USB\\VID_[0-9A-F]{4}&PID_[0-9A-F]{4}", RegexOptions.IgnoreCase);
+            return usbMatch.Success ? usbMatch.Value : string.Empty;
+        }
+
+        private async Task<string?> ResolveMicrosoftCatalogCabUrlAsync(DriverInfo driver)
+        {
+            try
+            {
+                bool isWin11 = Environment.OSVersion.Version.Build >= 22000;
+                string venDev = ExtractVendorDeviceKey(driver.HardwareId);
+                var queries = new List<string>();
+                if (!string.IsNullOrEmpty(venDev) && !string.IsNullOrEmpty(driver.LatestVersion))
+                    queries.Add($"{venDev} {driver.LatestVersion}");
+                if (!string.IsNullOrEmpty(venDev))
+                    queries.Add(venDev);
+                if (!string.IsNullOrEmpty(driver.WindowsUpdateTitle))
+                    queries.Add(driver.WindowsUpdateTitle);
+
+                foreach (string query in queries.Distinct())
+                {
+                    string searchUrl = "https://www.catalog.update.microsoft.com/Search.aspx?q=" + Uri.EscapeDataString(query);
+                    string html = await _http.GetStringAsync(searchUrl);
+                    var rows = Regex.Matches(html, @"<tr id=""([a-f0-9\-]{36})_R\d+""[\s\S]*?</tr>", RegexOptions.IgnoreCase);
+                    if (rows.Count == 0) continue;
+
+                    string? bestId = null;
+                    foreach (Match r in rows)
+                    {
+                        string id = r.Groups[1].Value;
+                        string rowText = Regex.Replace(r.Value, "<[^>]+>", " ");
+                        if (isWin11 && (rowText.Contains("Windows 11", StringComparison.OrdinalIgnoreCase) || rowText.Contains("Windows - Client", StringComparison.OrdinalIgnoreCase)))
+                        {
+                            bestId = id;
+                            break;
+                        }
+                        if (!isWin11 && (rowText.Contains("Windows 10", StringComparison.OrdinalIgnoreCase) || rowText.Contains("Windows - Client", StringComparison.OrdinalIgnoreCase)))
+                        {
+                            bestId = id;
+                            break;
+                        }
+                        bestId ??= id;
+                    }
+
+                    if (string.IsNullOrEmpty(bestId)) continue;
+
+                    string postBody = "updateIDs=" + Uri.EscapeDataString($"[{{\"size\":0,\"languages\":\"\",\"uidInfo\":\"{bestId}\",\"updateID\":\"{bestId}\"}}]");
+                    using var content = new StringContent(postBody, Encoding.UTF8, "application/x-www-form-urlencoded");
+                    var dlResp = await _http.PostAsync("https://www.catalog.update.microsoft.com/DownloadDialog.aspx", content);
+                    if (!dlResp.IsSuccessStatusCode) continue;
+
+                    string dlHtml = await dlResp.Content.ReadAsStringAsync();
+                    var cabMatch = Regex.Match(dlHtml, @"https?://[^\s'""<>]+\.cab", RegexOptions.IgnoreCase);
+                    if (cabMatch.Success)
+                    {
+                        return cabMatch.Value;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                AlpNetTelemetryService.Instance.Warn("DRIVER", $"Microsoft Update Catalog çözümleme hatası: {ex.Message}");
+            }
+            return null;
+        }
+
+        private async Task<(bool Success, string Message)> InstallCabDriverPackageAsync(string cabPath, DriverInfo driver, Action<int, string>? progressCallback = null)
+        {
+            string extractDir = Path.Combine(Path.GetTempPath(), $"AlpNetCab_{Guid.NewGuid():N}");
+            try
+            {
+                Directory.CreateDirectory(extractDir);
+                progressCallback?.Invoke(76, "WHQL sürücü arşivi açılıyor...");
+
+                string expandExe = Path.Combine(Environment.SystemDirectory, "expand.exe");
+                if (!File.Exists(expandExe)) expandExe = "expand.exe";
+
+                var expandPsi = new ProcessStartInfo
+                {
+                    FileName = expandExe,
+                    Arguments = $"\"{cabPath}\" -F:* \"{extractDir}\"",
+                    CreateNoWindow = true,
+                    WindowStyle = ProcessWindowStyle.Hidden,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                };
+
+                using (var expProc = Process.Start(expandPsi))
+                {
+                    if (expProc == null)
+                        return (false, "expand.exe başlatılamadı.");
+
+                    string expOut = await expProc.StandardOutput.ReadToEndAsync();
+                    string expErr = await expProc.StandardError.ReadToEndAsync();
+                    await expProc.WaitForExitAsync();
+
+                    if (expProc.ExitCode != 0)
+                    {
+                        return (false, $"CAB arşivi açılamadı (Kod: {expProc.ExitCode}): {(string.IsNullOrWhiteSpace(expErr) ? expOut.Trim() : expErr.Trim())}");
+                    }
+                }
+
+                var infFiles = Directory.GetFiles(extractDir, "*.inf", SearchOption.AllDirectories);
+                if (infFiles.Length == 0)
+                {
+                    return (false, "İndirilen WHQL paketi içinde .inf kurulum dosyası bulunamadı.");
+                }
+
+                progressCallback?.Invoke(82, "İmzalı WHQL sürücüsü Windows sürücü deposuna yükleniyor (pnputil)...");
+                string pnputilExe = Path.Combine(Environment.SystemDirectory, "pnputil.exe");
+                if (!File.Exists(pnputilExe)) pnputilExe = "pnputil.exe";
+
+                var pnpPsi = new ProcessStartInfo
+                {
+                    FileName = pnputilExe,
+                    Arguments = $"/add-driver \"{extractDir}\\*.inf\" /subdirs /install",
+                    CreateNoWindow = true,
+                    WindowStyle = ProcessWindowStyle.Hidden,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                };
+
+                using (var pnpProc = Process.Start(pnpPsi))
+                {
+                    if (pnpProc == null)
+                        return (false, "pnputil.exe başlatılamadı.");
+
+                    string pnpOut = await pnpProc.StandardOutput.ReadToEndAsync();
+                    string pnpErr = await pnpProc.StandardError.ReadToEndAsync();
+                    await pnpProc.WaitForExitAsync();
+
+                    // 0 = Başarılı, 3010 = Başarılı (Yeniden başlatma önerilir), 259 = Daha yeni/mevcut eşleşme yok
+                    if (pnpProc.ExitCode != 0 && pnpProc.ExitCode != 3010 && pnpProc.ExitCode != 259)
+                    {
+                        string detail = !string.IsNullOrWhiteSpace(pnpErr) ? pnpErr.Trim() : pnpOut.Trim();
+                        return (false, $"pnputil sürücü yüklemesi başarısız (Kod: {pnpProc.ExitCode}): {detail}");
+                    }
+
+                    AlpNetTelemetryService.Instance.Info("DRIVER", $"pnputil WHQL CAB kurulumu tamamlandı ({driver.Name}, Kod: {pnpProc.ExitCode}): {pnpOut.Replace(Environment.NewLine, " | ").Trim()}");
+                }
+
+                return (true, "WHQL CAB paketi başarıyla yüklendi.");
+            }
+            catch (Exception ex)
+            {
+                return (false, $"CAB sürücü kurulum hatası: {ex.Message}");
+            }
+            finally
+            {
+                try
+                {
+                    if (Directory.Exists(extractDir))
+                        Directory.Delete(extractDir, true);
+                }
+                catch { }
+            }
         }
 
         public static bool IsNewerVersion(string latestVer, string currentVer)
@@ -1717,7 +2067,16 @@ namespace AlpNetPulse
         {
             try
             {
-                using var response = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+                using var dlClient = new HttpClient(new HttpClientHandler
+                {
+                    ServerCertificateCustomValidationCallback = (_, _, _, _) => true
+                })
+                {
+                    Timeout = TimeSpan.FromMinutes(10)
+                };
+                dlClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 AlpNetPulse/2.3.6");
+
+                using var response = await dlClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
                 response.EnsureSuccessStatusCode();
 
                 long? totalBytes = response.Content.Headers.ContentLength;

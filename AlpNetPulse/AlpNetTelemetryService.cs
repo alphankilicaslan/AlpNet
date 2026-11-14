@@ -29,7 +29,7 @@ namespace AlpNetPulse
         private const string FIREBASE_AUTH_SECRET = "ExNWZwF2CkByKFILhfQ2BbTpuxYFlFAUO8quWwfc";
         public const string APP_ID = "alpnet-pulse";
         public const string APP_NAME = "AlpNet Pulse";
-        public const string APP_VERSION = "2.3.5";
+        public const string APP_VERSION = "2.3.6";
 
         private readonly HttpClient _http;
         private readonly string _logsDir;
