@@ -1,13 +1,16 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Management;
+using System.Net;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace AlpNetPulse
@@ -39,8 +42,10 @@ namespace AlpNetPulse
         public string Manufacturer { get; set; } = string.Empty;
         public string CurrentVersion { get; set; } = string.Empty;
         public string CurrentDateStr { get; set; } = string.Empty;
+        public DateTime CurrentDate { get; set; } = DateTime.MinValue;
         public string LatestVersion { get; set; } = string.Empty;
         public string LatestDateStr { get; set; } = string.Empty;
+        public DateTime LatestDate { get; set; } = DateTime.MinValue;
         public string DownloadUrl { get; set; } = string.Empty;
         public string DownloadSize { get; set; } = string.Empty;
         public string ReleaseNotes { get; set; } = string.Empty;
@@ -114,7 +119,7 @@ namespace AlpNetPulse
             {
                 Timeout = TimeSpan.FromSeconds(20)
             };
-            _http.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 AlpNetPulse/2.3.6");
+            _http.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 AlpNetPulse/2.3.7");
 
             string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
             _driverDataDir = Path.Combine(localAppData, "AlpNet", "Drivers");
@@ -132,7 +137,7 @@ namespace AlpNetPulse
         public string GetBackupsDirectory() => _backupsDir;
 
         // ═══════════════════════════════════════════════════════════
-        //  1. SÜRÜCÜLERİ TARA (GPU, CPU, ANAKART, WI-FI, DİĞER)
+        //  1. SÜRÜCÜLERİ TARA (GPU, CPU, ANAKART, AĞ/BT, SES)
         // ═══════════════════════════════════════════════════════════
         public async Task<List<DriverInfo>> ScanDriversAsync(Action<string>? progressCallback = null)
         {
@@ -140,9 +145,9 @@ namespace AlpNetPulse
 
             await Task.Run(async () =>
             {
-                progressCallback?.Invoke("Donanım sürücüleri paralel taranıyor (GPU, CPU, Anakart, Ağ)...");
+                progressCallback?.Invoke("Donanım sürücüleri paralel taranıyor (GPU, CPU, Anakart, Ağ, Bluetooth, Ses)...");
 
-                // Paralel donanım taraması (GPU, CPU, Anakart, Ağ adaptörleri)
+                // Paralel donanım taraması
                 var gpuTask = Task.Run(async () =>
                 {
                     try
@@ -198,12 +203,26 @@ namespace AlpNetPulse
                     }
                 });
 
-                await Task.WhenAll(gpuTask, cpuTask, mbTask, netTask);
+                var audioTask = Task.Run(() =>
+                {
+                    try
+                    {
+                        return ScanAudioDevices();
+                    }
+                    catch (Exception ex)
+                    {
+                        AlpNetTelemetryService.Instance.Warn("DRIVER", $"Ses aygıtı tarama hatası: {ex.Message}");
+                        return new List<DriverInfo>();
+                    }
+                });
+
+                await Task.WhenAll(gpuTask, cpuTask, mbTask, netTask, audioTask);
 
                 results.AddRange(gpuTask.Result);
                 results.AddRange(cpuTask.Result);
                 results.AddRange(mbTask.Result);
                 results.AddRange(netTask.Result);
+                results.AddRange(audioTask.Result);
 
                 // AlpTogether Cihaz Donanım Özellikleri Telemetrisi (Arka Planda Eşzamanlı)
                 var hardwareSyncTask = Task.Run(async () =>
@@ -219,16 +238,28 @@ namespace AlpNetPulse
                     }
                 });
 
-                // Windows Update WHQL Sürücü Araması (Maksimum 6 saniye kesin zaman aşımı koruması)
-                progressCallback?.Invoke("Windows WHQL sürücü veritabanı denetleniyor...");
+                // Bağımsız Doğrudan Microsoft Update Catalog Taraması (Windows Update servisi kapalı olsa / LTSC olsa dahi çalışır)
+                progressCallback?.Invoke("Microsoft Update Catalog (WHQL) doğrudan taranıyor...");
+                try
+                {
+                    using var catCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                    await EnrichDriversFromMicrosoftCatalogAsync(results, catCts.Token);
+                }
+                catch (Exception ex)
+                {
+                    AlpNetTelemetryService.Instance.Warn("DRIVER", $"Doğrudan Microsoft Catalog tarama uyarısı: {ex.Message}");
+                }
+
+                // İkincil Windows Update WHQL Sürücü Kontrolü (Maksimum 5 saniye zaman aşımı koruması; LTSC'de kapalıysa sessiz atlanır)
+                progressCallback?.Invoke("Windows WHQL veritabanı çapraz doğrulanıyor...");
                 try
                 {
                     var wuTask = CheckWindowsUpdateDriversAsync(results);
-                    var delayTask = Task.Delay(6000);
+                    var delayTask = Task.Delay(5000);
                     var completedTask = await Task.WhenAny(wuTask, delayTask);
                     if (completedTask == delayTask)
                     {
-                        AlpNetTelemetryService.Instance.Warn("DRIVER", "Windows Update sürücü araması 6 saniye zaman aşımına uğradı, mevcut donanım listesiyle devam ediliyor.");
+                        AlpNetTelemetryService.Instance.Warn("DRIVER", "Windows Update sürücü araması 5 saniye zaman aşımına uğradı, doğrudan Catalog sonuçlarıyla devam ediliyor.");
                     }
                 }
                 catch (Exception ex)
@@ -251,11 +282,12 @@ namespace AlpNetPulse
                         driver.ExistingBackupRecord = backup;
                     }
 
-                    // 2. Güvenlik Denetimi: Yüklü sürüm WHQL sürümüne eşit veya daha yeniyse ASLA güncelleme gösterme
-                    if (!driver.IsUpdateAvailable || !IsNewerVersion(driver.LatestVersion, driver.CurrentVersion) || string.Equals(driver.CurrentVersion, driver.LatestVersion, StringComparison.OrdinalIgnoreCase))
+                    // 2. Güvenlik Denetimi: Yüklü sürüm WHQL sürümüne eşit, daha yeni veya gerçek tarih olarak daha yeniyse ASLA güncelleme gösterme
+                    if (!driver.IsUpdateAvailable || !IsValidDriverUpgrade(driver, driver.LatestVersion, driver.LatestDate))
                     {
                         driver.IsUpdateAvailable = false;
                         driver.LatestVersion = driver.CurrentVersion;
+                        driver.LatestDate = driver.CurrentDate;
                         driver.LatestDateStr = "En Son WHQL";
                         driver.Status = DriverStatus.UpToDate;
                         driver.StatusBadgeText = driver.IsBiosFirmware ? "✔ KORUMALI BIOS (UEFI)" : "✔ GÜNCEL (WHQL Doğrulandı)";
@@ -289,7 +321,9 @@ namespace AlpNetPulse
                 {
                     string name = obj["Name"]?.ToString()?.Trim() ?? "Bilinmeyen Ekran Kartı";
                     string rawVer = obj["DriverVersion"]?.ToString()?.Trim() ?? "Bilinmiyor";
-                    string dateStr = FormatDriverDate(obj["DriverDate"]?.ToString());
+                    string rawDate = obj["DriverDate"]?.ToString() ?? "";
+                    string dateStr = FormatDriverDate(rawDate);
+                    DateTime parsedCurDate = ParseWmiDriverDate(rawDate);
                     string pnpId = obj["PNPDeviceID"]?.ToString() ?? "";
 
                     // Filtrele: Microsoft Basic Display Adapter veya yazılımsal adaptörler
@@ -312,8 +346,10 @@ namespace AlpNetPulse
                         Manufacturer = manufacturer,
                         CurrentVersion = displayVer,
                         CurrentDateStr = dateStr,
+                        CurrentDate = parsedCurDate,
                         LatestVersion = displayVer,
                         LatestDateStr = dateStr,
+                        LatestDate = parsedCurDate,
                         HardwareId = pnpId,
                         Status = DriverStatus.UpToDate,
                         StatusBadgeText = "✔ GÜNCEL",
@@ -425,12 +461,14 @@ namespace AlpNetPulse
                             {
                                 gpu.LatestVersion = latestVer;
                                 gpu.LatestDateStr = releaseDate;
-                                gpu.DownloadUrl = downloadUrl;
+                                if (DateTime.TryParse(releaseDate, CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces, out var parsedGpuDate))
+                                    gpu.LatestDate = parsedGpuDate;
+                                gpu.DownloadUrl = downloadUrl.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? downloadUrl : "";
                                 gpu.DownloadSize = fileSize;
                                 gpu.ReleaseNotes = StripHtml(notes);
 
-                                // Sürüm karşılaştırması
-                                if (IsNewerVersion(latestVer, gpu.CurrentVersion))
+                                // Sürüm ve tarih karşılaştırması
+                                if (!string.IsNullOrEmpty(gpu.DownloadUrl) && IsValidDriverUpgrade(gpu, latestVer, gpu.LatestDate))
                                 {
                                     gpu.IsUpdateAvailable = true;
                                     gpu.IsCritical = true;
@@ -442,7 +480,7 @@ namespace AlpNetPulse
                                 {
                                     gpu.IsUpdateAvailable = false;
                                     gpu.Status = DriverStatus.UpToDate;
-                                    gpu.StatusBadgeText = $"✔ EN GÜNCEL (v{latestVer})";
+                                    gpu.StatusBadgeText = $"✔ EN GÜNCEL (v{gpu.CurrentVersion})";
                                     gpu.StatusColorHex = "#00FF87";
                                 }
                             }
@@ -454,36 +492,8 @@ namespace AlpNetPulse
                     AlpNetTelemetryService.Instance.Warn("DRIVER", $"NVIDIA API güncelleme sorgulama hatası: {ex.Message}");
                 }
             }
-            else if (gpu.Manufacturer == "AMD")
-            {
-                // AMD Radeon Adrenalin En Güncel Bilgisi
-                gpu.LatestVersion = "24.12.1 WHQL";
-                gpu.LatestDateStr = "Aralık 2026";
-                gpu.DownloadUrl = "https://www.amd.com/en/support/download/drivers.html";
-                gpu.DownloadSize = "~680 MB";
-                if (IsNewerVersion("24.12.1", gpu.CurrentVersion))
-                {
-                    gpu.IsUpdateAvailable = true;
-                    gpu.Status = DriverStatus.UpdateAvailable;
-                    gpu.StatusBadgeText = "⚡ AMD ADRENALIN GÜNCELLEMESİ MEVCUT";
-                    gpu.StatusColorHex = "#FF5CAA";
-                }
-            }
-            else if (gpu.Manufacturer == "Intel")
-            {
-                // Intel Graphics En Güncel WHQL
-                gpu.LatestVersion = "32.0.101.6252";
-                gpu.LatestDateStr = "Ekim 2026";
-                gpu.DownloadUrl = "https://www.intel.com/content/www/us/en/download-center/home.html";
-                gpu.DownloadSize = "~800 MB";
-                if (IsNewerVersion("32.0.101.6252", gpu.CurrentVersion))
-                {
-                    gpu.IsUpdateAvailable = true;
-                    gpu.Status = DriverStatus.UpdateAvailable;
-                    gpu.StatusBadgeText = "⚡ INTEL ARC/GRAPHICS GÜNCELLEMESİ MEVCUT";
-                    gpu.StatusColorHex = "#00F2FE";
-                }
-            }
+            // AMD ve Intel GPU'lar için asla HTML web sayfası URL'si atanmaz;
+            // doğrudan EnrichDriversFromMicrosoftCatalogAsync ile donanım kimliğine özel gerçek WHQL .cab paketi çözümlenir.
         }
 
         // ═══════════════════════════════════════════════════════════
@@ -594,7 +604,7 @@ namespace AlpNetPulse
                 });
 
                 // 2. Çipset INF & Sistem Cihazları
-                using var pnpSearcher = new ManagementObjectSearcher("SELECT DeviceName, DriverVersion, DriverDate, Manufacturer, InfName FROM Win32_PnPSignedDriver WHERE DeviceClass = 'SYSTEM'");
+                using var pnpSearcher = new ManagementObjectSearcher("SELECT DeviceName, DriverVersion, DriverDate, Manufacturer, InfName, HardWareID, DeviceID FROM Win32_PnPSignedDriver WHERE DeviceClass = 'SYSTEM'");
                 var systemDrivers = pnpSearcher.Get().Cast<ManagementObject>()
                     .Where(o => {
                         string dName = o["DeviceName"]?.ToString() ?? "";
@@ -609,8 +619,11 @@ namespace AlpNetPulse
                 {
                     string dName = sObj["DeviceName"]?.ToString() ?? "Çipset Aygıtı";
                     string dVer = sObj["DriverVersion"]?.ToString() ?? "Bilinmiyor";
-                    string dDate = FormatDriverDate(sObj["DriverDate"]?.ToString());
+                    string rawDate = sObj["DriverDate"]?.ToString() ?? "";
+                    string dDate = FormatDriverDate(rawDate);
+                    DateTime parsedDate = ParseWmiDriverDate(rawDate);
                     string inf = sObj["InfName"]?.ToString() ?? "";
+                    string hwId = ExtractPrimaryHardwareId(sObj["HardWareID"], sObj["DeviceID"]);
 
                     list.Add(new DriverInfo
                     {
@@ -620,9 +633,12 @@ namespace AlpNetPulse
                         Manufacturer = sObj["Manufacturer"]?.ToString() ?? mbMfg,
                         CurrentVersion = dVer,
                         CurrentDateStr = dDate,
+                        CurrentDate = parsedDate,
                         LatestVersion = dVer,
                         LatestDateStr = dDate,
+                        LatestDate = parsedDate,
                         InfName = inf,
+                        HardwareId = hwId,
                         Status = DriverStatus.UpToDate,
                         StatusBadgeText = "✔ GÜNCEL",
                         StatusColorHex = "#00FF87"
@@ -637,7 +653,7 @@ namespace AlpNetPulse
         }
 
         // ═══════════════════════════════════════════════════════════
-        //  D. AĞ & WI-FI TARAMA
+        //  D. AĞ, WI-FI VE BLUETOOTH TARAMA
         // ═══════════════════════════════════════════════════════════
         private List<DriverInfo> ScanNetworkAdapters()
         {
@@ -650,64 +666,65 @@ namespace AlpNetPulse
                 {
                     string name = obj["DeviceName"]?.ToString()?.Trim() ?? "";
                     string ver = obj["DriverVersion"]?.ToString()?.Trim() ?? "Bilinmiyor";
-                    string date = FormatDriverDate(obj["DriverDate"]?.ToString());
+                    string rawDate = obj["DriverDate"]?.ToString() ?? "";
+                    string date = FormatDriverDate(rawDate);
+                    DateTime currentDate = ParseWmiDriverDate(rawDate);
                     string mfg = obj["Manufacturer"]?.ToString()?.Trim() ?? "Ağ Üreticisi";
                     string inf = obj["InfName"]?.ToString()?.Trim() ?? "";
                     string hwId = ExtractPrimaryHardwareId(obj["HardWareID"], obj["DeviceID"]);
 
-                    // Sanal ve miniport adaptörleri filtrele (Sadece gerçek Wi-Fi, Ethernet ve Bluetooth)
+                    // Sanal, VPN, miniport ve yazılım enum adaptörlerini filtrele (Sadece gerçek fiziksel Wi-Fi, Ethernet ve Bluetooth)
                     if (string.IsNullOrWhiteSpace(name)) continue;
-                    if (name.Contains("WAN Miniport", StringComparison.OrdinalIgnoreCase) ||
-                        name.Contains("Kernel Debug", StringComparison.OrdinalIgnoreCase) ||
-                        name.Contains("Direct Virtual", StringComparison.OrdinalIgnoreCase) ||
-                        name.Contains("Bluetooth Device (Personal", StringComparison.OrdinalIgnoreCase))
+                    if (IsVirtualOrInboxNetAdapter(name, hwId, inf))
                         continue;
 
                     bool isWifi = name.Contains("Wi-Fi", StringComparison.OrdinalIgnoreCase) ||
                                   name.Contains("Wireless", StringComparison.OrdinalIgnoreCase) ||
                                   name.Contains("802.11", StringComparison.OrdinalIgnoreCase);
 
-                    bool isEthernet = name.Contains("Ethernet", StringComparison.OrdinalIgnoreCase) ||
-                                      name.Contains("GbE", StringComparison.OrdinalIgnoreCase) ||
-                                      name.Contains("Realtek Gaming", StringComparison.OrdinalIgnoreCase) ||
-                                      name.Contains("Controller", StringComparison.OrdinalIgnoreCase);
-
                     bool isBluetooth = name.Contains("Bluetooth", StringComparison.OrdinalIgnoreCase);
+
+                    bool isEthernet = !isWifi && !isBluetooth && (
+                                      name.Contains("Ethernet", StringComparison.OrdinalIgnoreCase) ||
+                                      name.Contains("GbE", StringComparison.OrdinalIgnoreCase) ||
+                                      name.Contains("Realtek", StringComparison.OrdinalIgnoreCase) ||
+                                      name.Contains("Controller", StringComparison.OrdinalIgnoreCase) ||
+                                      name.Contains("Network", StringComparison.OrdinalIgnoreCase));
 
                     if (!isWifi && !isEthernet && !isBluetooth && !name.Contains("Intel", StringComparison.OrdinalIgnoreCase))
                         continue;
 
-                    // Çevrimiçi Microsoft Update Catalog WHQL sürücü eşleştirmesi
+                    // İlk çevrimdışı temel WHQL eşleştirmesi (tarih + sürüm + OS dalı korumalı; akabinde canlı Catalog ile daha günceli kontrol edilir)
                     string latestVer = ver;
                     string latestDate = date;
+                    DateTime latestDt = currentDate;
                     string downloadUrl = "";
                     string downloadSize = "";
                     bool updateAvail = false;
 
-                    if (isWifi && (hwId.Contains("VEN_8086", StringComparison.OrdinalIgnoreCase) || name.Contains("Intel", StringComparison.OrdinalIgnoreCase)))
+                    var probeDriver = new DriverInfo
                     {
-                        string targetVer = "23.80.1.3";
-                        if (IsNewerVersion(targetVer, ver))
-                        {
-                            latestVer = targetVer;
-                            latestDate = "Eylül 2024 (Intel WHQL)";
-                            downloadUrl = "https://catalog.s.download.windowsupdate.com/c/msdownload/update/driver/drvs/2024/11/6bc5d530-eaab-4a41-84f2-976acac264bb_4f5c1ae85e90bbea2d31fbd89666c1771a7d14e5.cab";
-                            downloadSize = "18.8 MB (WHQL CAB)";
-                            updateAvail = true;
-                        }
-                    }
-                    else if (isEthernet && (hwId.Contains("DEV_8125", StringComparison.OrdinalIgnoreCase) ||
+                        Name = name,
+                        Category = DriverCategory.Network,
+                        CurrentVersion = ver,
+                        CurrentDate = currentDate,
+                        HardwareId = hwId
+                    };
+
+                    if (isEthernet && (hwId.Contains("DEV_8125", StringComparison.OrdinalIgnoreCase) ||
                              (name.Contains("Realtek", StringComparison.OrdinalIgnoreCase) && (name.Contains("2.5G", StringComparison.OrdinalIgnoreCase) || name.Contains("2.5GbE", StringComparison.OrdinalIgnoreCase)))))
                     {
                         if (isWin11)
                         {
-                            string targetVer = "1125.22.1118.2024";
-                            if (IsNewerVersion(targetVer, ver))
+                            string targetVer = "1125.30.508.2026";
+                            DateTime targetDt = new DateTime(2026, 5, 7);
+                            if (IsValidDriverUpgrade(probeDriver, targetVer, targetDt))
                             {
                                 latestVer = targetVer;
-                                latestDate = "Kasım 2024 (WHQL)";
-                                downloadUrl = "https://catalog.s.download.windowsupdate.com/d/msdownload/update/driver/drvs/2025/04/86048b97-a84b-4e48-a284-f9a7a02df087_16c10552f57b8914f796603632683b1be8c25480.cab";
-                                downloadSize = "304 KB (WHQL CAB)";
+                                latestDate = "07.05.2026 (WHQL)";
+                                latestDt = targetDt;
+                                downloadUrl = "https://catalog.s.download.windowsupdate.com/d/msdownload/update/driver/drvs/2026/10/d1dd068b-b5b6-4caf-82d5-41e0956bc4f6_941cc22ac8d37ef751bffcc022f50f37858b6a5d.cab";
+                                downloadSize = "320 KB (WHQL CAB)";
                                 updateAvail = true;
                             }
                         }
@@ -717,23 +734,27 @@ namespace AlpNetPulse
                     {
                         if (isWin11)
                         {
-                            string targetVer = "1168.22.1118.2024";
-                            if (IsNewerVersion(targetVer, ver))
+                            string targetVer = "1168.23.225.2025";
+                            DateTime targetDt = new DateTime(2025, 2, 24);
+                            if (IsValidDriverUpgrade(probeDriver, targetVer, targetDt))
                             {
                                 latestVer = targetVer;
-                                latestDate = "Kasım 2024 (WHQL)";
-                                downloadUrl = "https://catalog.s.download.windowsupdate.com/d/msdownload/update/driver/drvs/2025/04/2d775acc-14fe-4db0-885b-c9f25f0f2cb6_5ae4931374eb83c59e79d21fda1855229dd3c8bc.cab";
-                                downloadSize = "339 KB (WHQL CAB)";
+                                latestDate = "24.02.2025 (WHQL)";
+                                latestDt = targetDt;
+                                downloadUrl = "https://catalog.s.download.windowsupdate.com/c/msdownload/update/driver/drvs/2025/04/b984dc0e-cdd8-49ae-86a9-d1b8ddac9030_0c98fa90a32e5c5884cc72c0bd775e55acf1eaa0.cab";
+                                downloadSize = "335 KB (WHQL CAB)";
                                 updateAvail = true;
                             }
                         }
                         else
                         {
                             string targetVer = "10.79.50.1003";
-                            if (IsNewerVersion(targetVer, ver))
+                            DateTime targetDt = new DateTime(2025, 10, 2);
+                            if (IsValidDriverUpgrade(probeDriver, targetVer, targetDt))
                             {
                                 latestVer = targetVer;
-                                latestDate = "Ekim 2025 (Win10 WHQL)";
+                                latestDate = "02.10.2025 (Win10 WHQL)";
+                                latestDt = targetDt;
                                 downloadUrl = "https://catalog.s.download.windowsupdate.com/d/msdownload/update/driver/drvs/2026/01/16270d4d-ca9d-4fb6-a0f4-e4354f3f98bb_63e362b5d90631a42779ff2986cd9e92eb2dc96f.cab";
                                 downloadSize = "584 KB (WHQL CAB)";
                                 updateAvail = true;
@@ -742,7 +763,7 @@ namespace AlpNetPulse
                     }
 
                     string notes = isWifi ? "Wi-Fi bağlantı gecikmesini (jitter) ve ping stabilitesini artıran güncel paket."
-                        : isBluetooth ? "Bluetooth 5.3 çevre birimi eşleşme kararlılığı ve düşük gecikme paketi."
+                        : isBluetooth ? "Bluetooth çevre birimi eşleşme kararlılığı ve düşük gecikme WHQL paketi."
                         : "Gigabit Ethernet paket transfer optimizasyonu.";
 
                     list.Add(new DriverInfo
@@ -753,8 +774,10 @@ namespace AlpNetPulse
                         Manufacturer = mfg,
                         CurrentVersion = ver,
                         CurrentDateStr = date,
+                        CurrentDate = currentDate,
                         LatestVersion = latestVer,
                         LatestDateStr = latestDate,
+                        LatestDate = latestDt,
                         DownloadUrl = downloadUrl,
                         DownloadSize = downloadSize,
                         InfName = inf,
@@ -770,6 +793,105 @@ namespace AlpNetPulse
             catch (Exception ex)
             {
                 AlpNetTelemetryService.Instance.Warn("DRIVER", $"Ağ adaptörü sorgu hatası: {ex.Message}");
+            }
+            return list;
+        }
+
+        private static bool IsVirtualOrInboxNetAdapter(string name, string hwId, string infName)
+        {
+            if (name.Contains("WAN Miniport", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("Kernel Debug", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("Direct Virtual", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("Bluetooth Device (Personal", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("Bluetooth Device (RFCOMM", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("Microsoft Bluetooth", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("Hamachi", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("VirtualBox", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("WireSock", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("WireGuard", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("Wintun", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("TAP-Windows", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("Hyper-V Virtual", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("VMware", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("ZeroTier", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("Radmin", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("Loopback", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (string.IsNullOrWhiteSpace(hwId))
+                return true;
+
+            // Yalnızca gerçek fiziksel veri yolu kimliklerini kabul et (PCI, USB, ACPI, SD, BTHUSB)
+            return !(hwId.StartsWith("PCI\\", StringComparison.OrdinalIgnoreCase) ||
+                     hwId.StartsWith("USB\\", StringComparison.OrdinalIgnoreCase) ||
+                     hwId.StartsWith("ACPI\\", StringComparison.OrdinalIgnoreCase) ||
+                     hwId.StartsWith("SD\\", StringComparison.OrdinalIgnoreCase) ||
+                     hwId.StartsWith("BTHUSB\\", StringComparison.OrdinalIgnoreCase));
+        }
+
+        // ═══════════════════════════════════════════════════════════
+        //  D2. SES AYGITI TARAMA (REALTEK / CONEXANT / CIRRUS VB.)
+        // ═══════════════════════════════════════════════════════════
+        private List<DriverInfo> ScanAudioDevices()
+        {
+            var list = new List<DriverInfo>();
+            try
+            {
+                using var searcher = new ManagementObjectSearcher("SELECT DeviceName, DriverVersion, DriverDate, Manufacturer, InfName, HardWareID, DeviceID FROM Win32_PnPSignedDriver WHERE DeviceClass = 'MEDIA'");
+                foreach (ManagementObject obj in searcher.Get().Cast<ManagementObject>())
+                {
+                    string name = obj["DeviceName"]?.ToString()?.Trim() ?? "";
+                    string ver = obj["DriverVersion"]?.ToString()?.Trim() ?? "Bilinmiyor";
+                    string rawDate = obj["DriverDate"]?.ToString() ?? "";
+                    string date = FormatDriverDate(rawDate);
+                    DateTime parsedDate = ParseWmiDriverDate(rawDate);
+                    string mfg = obj["Manufacturer"]?.ToString()?.Trim() ?? "Ses Üreticisi";
+                    string inf = obj["InfName"]?.ToString()?.Trim() ?? "";
+                    string hwId = ExtractPrimaryHardwareId(obj["HardWareID"], obj["DeviceID"]);
+
+                    if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(hwId)) continue;
+                    if (name.Contains("VB-Audio", StringComparison.OrdinalIgnoreCase) ||
+                        name.Contains("Sonar", StringComparison.OrdinalIgnoreCase) ||
+                        name.Contains("Broadcast", StringComparison.OrdinalIgnoreCase) ||
+                        name.Contains("Virtual Audio", StringComparison.OrdinalIgnoreCase) ||
+                        name.Contains("Steam Streaming", StringComparison.OrdinalIgnoreCase) ||
+                        name.Contains("Voicemeeter", StringComparison.OrdinalIgnoreCase) ||
+                        inf.Equals("wdma_usb.inf", StringComparison.OrdinalIgnoreCase) ||
+                        hwId.StartsWith("ROOT\\", StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    if (!(hwId.StartsWith("HDAUDIO\\", StringComparison.OrdinalIgnoreCase) ||
+                          hwId.StartsWith("INTELAUDIO\\", StringComparison.OrdinalIgnoreCase) ||
+                          hwId.StartsWith("PCI\\", StringComparison.OrdinalIgnoreCase)))
+                        continue;
+
+                    list.Add(new DriverInfo
+                    {
+                        Id = "AUDIO_" + Guid.NewGuid().ToString("N")[..6],
+                        Name = name,
+                        Category = DriverCategory.Audio,
+                        Manufacturer = mfg,
+                        CurrentVersion = ver,
+                        CurrentDateStr = date,
+                        CurrentDate = parsedDate,
+                        LatestVersion = ver,
+                        LatestDateStr = date,
+                        LatestDate = parsedDate,
+                        InfName = inf,
+                        HardwareId = hwId,
+                        IsUpdateAvailable = false,
+                        Status = DriverStatus.UpToDate,
+                        StatusBadgeText = "✔ GÜNCEL",
+                        StatusColorHex = "#00FF87",
+                        ReleaseNotes = "Donanımsal ses kodek (SUBSYS eşleşmeli) WHQL sürücüsü."
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                AlpNetTelemetryService.Instance.Warn("DRIVER", $"Ses aygıtı tarama hatası: {ex.Message}");
             }
             return list;
         }
@@ -833,36 +955,83 @@ namespace AlpNetPulse
                             targetCat = DriverCategory.Audio;
                         }
 
-                        // 2. Sürümü başlıktan ayıkla (Örn: 24.80.0.2)
+                        // 2. Sürüm, donanım kimliği ve gerçek sürücü tarihini COM nesnesinden oku
                         var verMatch = Regex.Match(title, @"\b\d+(\.\d+){1,4}\b");
                         string extractedVer = verMatch.Success ? verMatch.Value : "";
+                        string wuHwId = "";
+                        string wuModel = "";
+                        DateTime wuDate = DateTime.MinValue;
+                        try { wuHwId = u.DriverHardwareID?.ToString() ?? ""; } catch { }
+                        try { wuModel = u.DriverModel?.ToString() ?? ""; } catch { }
+                        try
+                        {
+                            object? rawDt = u.DriverVerDate;
+                            if (rawDt is DateTime dt) wuDate = dt;
+                            else if (rawDt != null) DateTime.TryParse(rawDt.ToString(), out wuDate);
+                        }
+                        catch { }
 
-                        // 3. Yalnızca KATEGORİSİ EŞLEŞEN ve BIOS OLMAYAN donanımları ara
+                        // 3. Yalnızca Donanım Kimliği / Modeli veya Kategorisi gerçekten eşleşen donanımları seç (çapraz cihaz çakışmasını engelle)
+                        bool isBtTitle = lowerTitle.Contains("bluetooth");
+                        bool isWifiTitle = lowerTitle.Contains("wi-fi") || lowerTitle.Contains("wireless") || lowerTitle.Contains("802.11");
+                        string wuVenDev = ExtractVendorDeviceKey(wuHwId);
                         var candidates = existingDrivers.Where(d =>
                         {
                             if (d.IsBiosFirmware) return false;
                             if (targetCat.HasValue && d.Category != targetCat.Value) return false;
 
-                            bool mfgMatch = !string.IsNullOrEmpty(d.Manufacturer) && title.Contains(d.Manufacturer, StringComparison.OrdinalIgnoreCase);
-                            bool nameMatch = !string.IsNullOrEmpty(d.Name) && (title.Contains(d.Name, StringComparison.OrdinalIgnoreCase) || d.Name.Contains(title, StringComparison.OrdinalIgnoreCase));
+                            if (!string.IsNullOrEmpty(wuVenDev) && !string.IsNullOrEmpty(d.HardwareId))
+                            {
+                                string dVenDev = ExtractVendorDeviceKey(d.HardwareId);
+                                if (!string.IsNullOrEmpty(dVenDev))
+                                    return dVenDev.Equals(wuVenDev, StringComparison.OrdinalIgnoreCase);
+                            }
 
-                            return mfgMatch || nameMatch;
+                            if (d.Category == DriverCategory.Network)
+                            {
+                                bool isBtDev = d.Name.Contains("Bluetooth", StringComparison.OrdinalIgnoreCase);
+                                bool isWifiDev = d.Name.Contains("Wi-Fi", StringComparison.OrdinalIgnoreCase) ||
+                                                 d.Name.Contains("Wireless", StringComparison.OrdinalIgnoreCase) ||
+                                                 d.Name.Contains("802.11", StringComparison.OrdinalIgnoreCase);
+                                if (isBtTitle != isBtDev) return false;
+                                if (isWifiTitle && !isWifiDev) return false;
+                            }
+
+                            if (!string.IsNullOrEmpty(wuModel) &&
+                                (d.Name.Contains(wuModel, StringComparison.OrdinalIgnoreCase) ||
+                                 wuModel.Contains(d.Name, StringComparison.OrdinalIgnoreCase)))
+                            {
+                                return true;
+                            }
+
+                            bool nameMatch = !string.IsNullOrEmpty(d.Name) && (title.Contains(d.Name, StringComparison.OrdinalIgnoreCase) || d.Name.Contains(title, StringComparison.OrdinalIgnoreCase));
+                            bool mfgMatch = string.IsNullOrEmpty(wuHwId) && !string.IsNullOrEmpty(d.Manufacturer) && title.Contains(d.Manufacturer, StringComparison.OrdinalIgnoreCase);
+
+                            return nameMatch || mfgMatch;
                         }).ToList();
 
                         foreach (var matched in candidates)
                         {
-                            // 4. Kesin sürüm karşılaştırması: Yeni sürüm mevcut sürümden BÜYÜKSE ve EŞİT DEĞİLSE güncelleme işaretle
-                            if (!string.IsNullOrEmpty(extractedVer) && IsNewerVersion(extractedVer, matched.CurrentVersion) && !string.Equals(extractedVer, matched.CurrentVersion, StringComparison.OrdinalIgnoreCase))
+                            // 4. Kesin sürüm + tarih + dal doğrulaması
+                            if (!string.IsNullOrEmpty(extractedVer) && IsValidDriverUpgrade(matched, extractedVer, wuDate))
                             {
-                                bool isNewerThanCatalog = IsNewerVersion(extractedVer, matched.LatestVersion);
-                                if (string.IsNullOrEmpty(matched.DownloadUrl) || isNewerThanCatalog)
+                                bool isNewerThanCatalog = string.IsNullOrEmpty(matched.DownloadUrl) ||
+                                    (IsNewerVersion(extractedVer, matched.LatestVersion) &&
+                                     (wuDate == DateTime.MinValue || matched.LatestDate == DateTime.MinValue || wuDate >= matched.LatestDate.AddDays(-7)));
+
+                                if (isNewerThanCatalog)
                                 {
-                                    if (isNewerThanCatalog && !string.IsNullOrEmpty(matched.DownloadUrl))
+                                    if (!string.IsNullOrEmpty(matched.DownloadUrl))
                                     {
                                         matched.DownloadUrl = "";
                                         matched.DownloadSize = "Windows WHQL";
                                     }
                                     matched.LatestVersion = extractedVer;
+                                    if (wuDate > DateTime.MinValue)
+                                    {
+                                        matched.LatestDate = wuDate;
+                                        matched.LatestDateStr = $"{wuDate:dd.MM.yyyy} (Windows WHQL)";
+                                    }
                                     matched.IsUpdateAvailable = true;
                                     matched.Status = DriverStatus.UpdateAvailable;
                                     matched.StatusBadgeText = "⚡ WHQL GÜNCELLEME MEVCUT";
@@ -876,7 +1045,14 @@ namespace AlpNetPulse
                 }
                 catch (Exception ex)
                 {
-                    AlpNetTelemetryService.Instance.Warn("DRIVER", $"CheckWindowsUpdateDriversAsync hatası: {ex.Message}");
+                    if ((uint)ex.HResult is 0x80070422 or 0x8024002E or 0x8024402C)
+                    {
+                        AlpNetTelemetryService.Instance.Info("DRIVER", "Windows Update servisi devre dışı/kısıtlı (LTSC/Policy); doğrudan Microsoft Update Catalog modu kullanılıyor.");
+                    }
+                    else
+                    {
+                        AlpNetTelemetryService.Instance.Warn("DRIVER", $"CheckWindowsUpdateDriversAsync hatası: {ex.Message}");
+                    }
                 }
             });
         }
@@ -891,8 +1067,8 @@ namespace AlpNetPulse
                 return (false, "BIOS ve Firmware anakartın kök yazılımıdır. Windows içinden otomatik kurulması donanımın brick olma riskini taşır. Lütfen anakart üreticinizin resmi BIOS flash aracını kullanınız.");
             }
 
-            // Güvenlik denetimi: Aynı sürüm veya daha eski sürüm güncellemesini kesin olarak engelle
-            if (!driver.IsUpdateAvailable || !IsNewerVersion(driver.LatestVersion, driver.CurrentVersion) || string.Equals(driver.CurrentVersion, driver.LatestVersion, StringComparison.OrdinalIgnoreCase))
+            // Güvenlik denetimi: Aynı sürüm, daha eski tarihli veya uyumsuz dal güncellemesini kesin olarak engelle
+            if (!driver.IsUpdateAvailable || !IsValidDriverUpgrade(driver, driver.LatestVersion, driver.LatestDate))
             {
                 return (false, $"{driver.Name} zaten en güncel sürümde (v{driver.CurrentVersion}).");
             }
@@ -913,12 +1089,29 @@ namespace AlpNetPulse
 
             bool installAttempted = false;
 
-            if (driver.Category == DriverCategory.GPU && !string.IsNullOrEmpty(driver.DownloadUrl))
+            if (driver.Category == DriverCategory.GPU && string.IsNullOrEmpty(driver.DownloadUrl))
+            {
+                if (!string.IsNullOrEmpty(driver.WindowsUpdateTitle))
+                {
+                    var wuRes = await InstallWindowsUpdateDriverAsync(driver.WindowsUpdateTitle, progressCallback);
+                    installAttempted = wuRes.Success;
+                }
+                if (!installAttempted)
+                {
+                    string? catalogUrl = await ResolveMicrosoftCatalogCabUrlAsync(driver);
+                    if (!string.IsNullOrEmpty(catalogUrl))
+                        driver.DownloadUrl = catalogUrl;
+                }
+            }
+
+            if (driver.Category == DriverCategory.GPU && !installAttempted && !string.IsNullOrEmpty(driver.DownloadUrl))
             {
                 progressCallback?.Invoke(35, $"Resmi {driver.Manufacturer} sürücüsü indiriliyor...");
                 string tempDir = Path.Combine(Path.GetTempPath(), "AlpNetDriverSetup");
                 if (!Directory.Exists(tempDir)) Directory.CreateDirectory(tempDir);
-                string installerPath = Path.Combine(tempDir, $"{safeName}_v{driver.LatestVersion}.exe");
+                bool isCabPackage = driver.DownloadUrl.Contains(".cab", StringComparison.OrdinalIgnoreCase);
+                string ext = isCabPackage ? ".cab" : ".exe";
+                string installerPath = Path.Combine(tempDir, $"{safeName}_v{driver.LatestVersion}{ext}");
 
                 // İndir
                 bool downloaded = await DownloadFileWithProgressAsync(driver.DownloadUrl, installerPath, (pct) =>
@@ -927,7 +1120,7 @@ namespace AlpNetPulse
                     progressCallback?.Invoke(scaled, $"Sürücü İndiriliyor: %{pct} ({driver.DownloadSize})");
                 });
 
-                if (!downloaded || !File.Exists(installerPath))
+                if (!downloaded || !File.Exists(installerPath) || new FileInfo(installerPath).Length < 4096)
                 {
                     await AlpNetTelemetryService.Instance.RecordDriverUpdateTelemetryAsync(new DriverUpdateTelemetryRecord
                     {
@@ -945,25 +1138,48 @@ namespace AlpNetPulse
                     return (false, "Sürücü paketi indirilemedi. Lütfen internet bağlantınızı kontrol edin.");
                 }
 
-                progressCallback?.Invoke(85, "Kurulum başlatılıyor (Sessiz mod hazırlanıyor)...");
-                try
+                if (isCabPackage)
                 {
-                    var psi = new ProcessStartInfo
+                    var cabRes = await InstallCabDriverPackageAsync(installerPath, driver, progressCallback);
+                    installAttempted = cabRes.Success;
+                    if (!cabRes.Success)
                     {
-                        FileName = installerPath,
-                        Arguments = "-s",
-                        UseShellExecute = true,
-                        Verb = "runas"
-                    };
-                    var p = Process.Start(psi);
-                    if (p != null) await p.WaitForExitAsync();
-                    installAttempted = true;
+                        return (false, $"{driver.Name} güncellenemedi: {cabRes.Message}");
+                    }
+                    await TriggerDeviceUpdateAsync(driver.HardwareId);
                 }
-                catch
+                else
                 {
-                    var p = Process.Start(new ProcessStartInfo(installerPath) { UseShellExecute = true });
-                    if (p != null) await p.WaitForExitAsync();
-                    installAttempted = true;
+                    byte[] header = new byte[2];
+                    using (var fs = File.OpenRead(installerPath))
+                    {
+                        _ = fs.Read(header, 0, 2);
+                    }
+                    if (header[0] != (byte)'M' || header[1] != (byte)'Z')
+                    {
+                        return (false, "İndirilen grafik sürücüsü dosyası geçerli bir kurulum çalıştırılabilir dosyası (.exe) değil.");
+                    }
+
+                    progressCallback?.Invoke(85, "Kurulum başlatılıyor (Sessiz mod hazırlanıyor)...");
+                    try
+                    {
+                        var psi = new ProcessStartInfo
+                        {
+                            FileName = installerPath,
+                            Arguments = "-s",
+                            UseShellExecute = true,
+                            Verb = "runas"
+                        };
+                        var p = Process.Start(psi);
+                        if (p != null) await p.WaitForExitAsync();
+                        installAttempted = true;
+                    }
+                    catch
+                    {
+                        var p = Process.Start(new ProcessStartInfo(installerPath) { UseShellExecute = true });
+                        if (p != null) await p.WaitForExitAsync();
+                        installAttempted = true;
+                    }
                 }
             }
             else if (driver.Category == DriverCategory.Network)
@@ -1752,67 +1968,384 @@ namespace AlpNetPulse
             return string.Empty;
         }
 
+        private sealed class CatalogDriverCandidate
+        {
+            public string UpdateId { get; init; } = string.Empty;
+            public string Title { get; init; } = string.Empty;
+            public string Products { get; init; } = string.Empty;
+            public string Classification { get; init; } = string.Empty;
+            public string Version { get; init; } = string.Empty;
+            public DateTime LastUpdated { get; init; }
+            public string SizeLabel { get; init; } = string.Empty;
+        }
+
         private static string ExtractVendorDeviceKey(string? hardwareId)
         {
             if (string.IsNullOrWhiteSpace(hardwareId)) return string.Empty;
-            var match = Regex.Match(hardwareId, @"(PCI|USB)\\VEN_[0-9A-F]{4}&DEV_[0-9A-F]{4}", RegexOptions.IgnoreCase);
+            var match = Regex.Match(hardwareId, @"(?:PCI|USB)\\VEN_[0-9A-F]{4}&DEV_[0-9A-F]{4}", RegexOptions.IgnoreCase);
             if (match.Success) return match.Value;
             var usbMatch = Regex.Match(hardwareId, @"USB\\VID_[0-9A-F]{4}&PID_[0-9A-F]{4}", RegexOptions.IgnoreCase);
-            return usbMatch.Success ? usbMatch.Value : string.Empty;
+            if (usbMatch.Success) return usbMatch.Value;
+            var audioMatch = Regex.Match(hardwareId, @"(?:INTELAUDIO|HDAUDIO)\\FUNC_[0-9A-F]{2}&VEN_[0-9A-F]{4}&DEV_[0-9A-F]{4}", RegexOptions.IgnoreCase);
+            return audioMatch.Success ? audioMatch.Value : string.Empty;
+        }
+
+        private static string ExtractSubsysHardwareKey(string? hardwareId)
+        {
+            if (string.IsNullOrWhiteSpace(hardwareId)) return string.Empty;
+            string cleaned = Regex.Replace(hardwareId.Trim(), @"&REV_[0-9A-F]+", "", RegexOptions.IgnoreCase);
+            var subMatch = Regex.Match(cleaned, @"^.+&SUBSYS_[0-9A-F]{8}", RegexOptions.IgnoreCase);
+            return subMatch.Success ? subMatch.Value : string.Empty;
+        }
+
+        private static List<string> BuildCatalogSearchQueries(DriverInfo driver)
+        {
+            var queries = new List<string>();
+            if (string.IsNullOrWhiteSpace(driver.HardwareId))
+                return queries;
+
+            bool isWin11 = Environment.OSVersion.Version.Build >= 22000;
+            string subsysKey = ExtractSubsysHardwareKey(driver.HardwareId);
+            string venDev = ExtractVendorDeviceKey(driver.HardwareId);
+
+            // Realtek 8168 Win11 NetAdapterCx branch (1168.x) Katalog arama önceliği
+            if (isWin11 && !string.IsNullOrEmpty(venDev) &&
+                venDev.Contains("DEV_8168", StringComparison.OrdinalIgnoreCase))
+            {
+                queries.Add($"{venDev} 1168");
+            }
+
+            // Ses aygıtları için YALNIZCA OEM SUBSYS eşleşmesi kullanılır (yanlış OEM paketlerini önler)
+            if (driver.Category == DriverCategory.Audio)
+            {
+                if (!string.IsNullOrEmpty(subsysKey))
+                    queries.Add(subsysKey);
+                else if (!string.IsNullOrEmpty(venDev))
+                    queries.Add(venDev);
+                return queries.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            }
+
+            if (!string.IsNullOrEmpty(subsysKey))
+                queries.Add(subsysKey);
+            if (!string.IsNullOrEmpty(venDev))
+                queries.Add(venDev);
+
+            return queries.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        }
+
+        private async Task EnrichDriversFromMicrosoftCatalogAsync(List<DriverInfo> drivers, CancellationToken ct)
+        {
+            var candidates = drivers.Where(d =>
+            {
+                if (d.IsBiosFirmware || string.IsNullOrWhiteSpace(d.HardwareId))
+                    return false;
+                if (d.HardwareId.StartsWith("ACPI\\", StringComparison.OrdinalIgnoreCase))
+                    return false;
+                if (d.Category == DriverCategory.GPU && d.Manufacturer.Equals("NVIDIA", StringComparison.OrdinalIgnoreCase))
+                    return false; // NVIDIA kendi resmi Ajax WHQL API'sini kullanır
+                return d.Category == DriverCategory.Network ||
+                       d.Category == DriverCategory.Audio ||
+                       d.Category == DriverCategory.GPU ||
+                       d.Category == DriverCategory.Motherboard;
+            }).ToList();
+
+            if (candidates.Count == 0) return;
+
+            using var throttler = new SemaphoreSlim(4, 4);
+            var tasks = candidates.Select(async drv =>
+            {
+                await throttler.WaitAsync(ct);
+                try
+                {
+                    var match = await FindBestMicrosoftCatalogCandidateAsync(drv, ct);
+                    if (match == null) return;
+
+                    string baselineVer = drv.IsUpdateAvailable && !string.IsNullOrEmpty(drv.LatestVersion)
+                        ? drv.LatestVersion
+                        : drv.CurrentVersion;
+
+                    if (!IsValidDriverUpgrade(drv, match.Version, match.LastUpdated))
+                        return;
+
+                    // Zaten doğrulanan bir güncelleme URL'si varsa yalnızca daha yeni bir sürüm ve tarih bulunduğunda üstüne yaz
+                    if (!string.IsNullOrEmpty(drv.DownloadUrl))
+                    {
+                        if (!IsNewerVersion(match.Version, baselineVer))
+                            return;
+                        if (match.LastUpdated > DateTime.MinValue && drv.LatestDate > DateTime.MinValue &&
+                            match.LastUpdated < drv.LatestDate.AddDays(-7))
+                            return;
+                    }
+
+                    string? cabUrl = await ResolveCatalogDownloadUrlByIdAsync(match.UpdateId, ct);
+                    if (string.IsNullOrEmpty(cabUrl))
+                        return;
+
+                    drv.LatestVersion = match.Version;
+                    drv.LatestDate = match.LastUpdated;
+                    drv.LatestDateStr = match.LastUpdated != DateTime.MinValue
+                        ? match.LastUpdated.ToString("dd.MM.yyyy") + " (WHQL)"
+                        : "Microsoft Catalog WHQL";
+                    drv.DownloadUrl = cabUrl;
+                    drv.DownloadSize = string.IsNullOrEmpty(match.SizeLabel) ? "WHQL CAB" : $"{match.SizeLabel} (WHQL CAB)";
+                    drv.IsUpdateAvailable = true;
+                    drv.Status = DriverStatus.UpdateAvailable;
+                    drv.StatusBadgeText = $"⚡ YENİ GÜNCELLEME: v{match.Version}";
+                    drv.StatusColorHex = "#00F2FE";
+                    if (string.IsNullOrWhiteSpace(drv.ReleaseNotes))
+                        drv.ReleaseNotes = match.Title;
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception ex)
+                {
+                    AlpNetTelemetryService.Instance.Warn("DRIVER", $"Katalog denetim hatası ({drv.Name}): {ex.Message}");
+                }
+                finally
+                {
+                    throttler.Release();
+                }
+            });
+
+            await Task.WhenAll(tasks);
+        }
+
+        private async Task<CatalogDriverCandidate?> FindBestMicrosoftCatalogCandidateAsync(DriverInfo driver, CancellationToken ct)
+        {
+            var queries = BuildCatalogSearchQueries(driver);
+            if (queries.Count == 0 && !string.IsNullOrEmpty(driver.WindowsUpdateTitle))
+                queries.Add(driver.WindowsUpdateTitle);
+
+            int build = Environment.OSVersion.Version.Build;
+            bool isBluetooth = driver.Name.Contains("Bluetooth", StringComparison.OrdinalIgnoreCase);
+
+            foreach (string query in queries)
+            {
+                string searchUrl = "https://www.catalog.update.microsoft.com/Search.aspx?q=" + Uri.EscapeDataString(query);
+                string html = await _http.GetStringAsync(searchUrl, ct);
+                var rows = Regex.Matches(html, @"<tr id=""([a-f0-9\-]{36})_R\d+""[\s\S]*?</tr>", RegexOptions.IgnoreCase);
+                if (rows.Count == 0) continue;
+
+                CatalogDriverCandidate? bestForQuery = null;
+
+                foreach (Match r in rows)
+                {
+                    string id = r.Groups[1].Value;
+                    var tdMatches = Regex.Matches(r.Value, @"<td[^>]*>([\s\S]*?)</td>", RegexOptions.IgnoreCase);
+                    if (tdMatches.Count < 7) continue;
+
+                    string title = CleanCatalogCellText(tdMatches[1].Groups[1].Value);
+                    string products = CleanCatalogCellText(tdMatches[2].Groups[1].Value);
+                    string classification = CleanCatalogCellText(tdMatches[3].Groups[1].Value);
+                    string dateRaw = CleanCatalogCellText(tdMatches[4].Groups[1].Value);
+                    string versionRaw = CleanCatalogCellText(tdMatches[5].Groups[1].Value);
+                    string sizeRaw = CleanCatalogCellText(tdMatches[6].Groups[1].Value);
+
+                    if (!IsCatalogRowSafeForDriver(title, products, classification, driver.Category, isBluetooth, build))
+                        continue;
+
+                    string version = ExtractCatalogRowVersion(versionRaw, title);
+                    if (string.IsNullOrEmpty(version))
+                        continue;
+
+                    DateTime.TryParse(dateRaw, CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsedDate);
+                    if (!IsValidDriverUpgrade(driver, version, parsedDate))
+                        continue;
+
+                    var sizeMatch = Regex.Match(sizeRaw, @"^\s*([\d\.,]+\s*(?:KB|MB|GB))", RegexOptions.IgnoreCase);
+                    string sizeLabel = sizeMatch.Success ? sizeMatch.Groups[1].Value.Trim() : "";
+
+                    if (bestForQuery == null ||
+                        IsNewerVersion(version, bestForQuery.Version) ||
+                        (string.Equals(version, bestForQuery.Version, StringComparison.OrdinalIgnoreCase) && parsedDate > bestForQuery.LastUpdated))
+                    {
+                        bestForQuery = new CatalogDriverCandidate
+                        {
+                            UpdateId = id,
+                            Title = title,
+                            Products = products,
+                            Classification = classification,
+                            Version = version,
+                            LastUpdated = parsedDate,
+                            SizeLabel = sizeLabel
+                        };
+                    }
+                }
+
+                // Ses aygıtlarında OEM SUBSYS sorgusu zaten donanım eşleştirdiyse jeneriğe düşme; ağ/BT için en iyi eşleşeni hemen döndür
+                if (bestForQuery != null)
+                    return bestForQuery;
+
+                // Audio veya Realtek 1168+SUBSYS aramasında ilk sorgu sonuç döndürdüyse yanlış OEM paketine düşmemek için sonraki gevşek sorguyu atla
+                if (driver.Category == DriverCategory.Audio && query.Contains("SUBSYS_", StringComparison.OrdinalIgnoreCase))
+                    return null;
+            }
+
+            return null;
+        }
+
+        private static string CleanCatalogCellText(string cellHtml)
+        {
+            string decoded = WebUtility.HtmlDecode(Regex.Replace(cellHtml, "<[^>]+>", " "));
+            return Regex.Replace(decoded, @"\s+", " ").Trim();
+        }
+
+        private static string ExtractCatalogRowVersion(string versionCell, string title)
+        {
+            if (Regex.IsMatch(versionCell, @"^\d+(\.\d+){1,4}$"))
+                return versionCell;
+
+            var match = Regex.Match(title, @"\b\d+\.\d+\.\d+(?:\.\d+)?\b");
+            return match.Success ? match.Value : string.Empty;
+        }
+
+        private static bool IsCatalogRowSafeForDriver(string title, string products, string classification, DriverCategory category, bool isBluetooth, int osBuild)
+        {
+            if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(products))
+                return false;
+
+            if (title.Contains("Extension", StringComparison.OrdinalIgnoreCase) ||
+                title.Contains("SoftwareComponent", StringComparison.OrdinalIgnoreCase) ||
+                title.Contains("Software Component", StringComparison.OrdinalIgnoreCase) ||
+                title.Contains("APO", StringComparison.OrdinalIgnoreCase) ||
+                title.Contains("Firmware", StringComparison.OrdinalIgnoreCase) ||
+                title.Contains("Dynamic", StringComparison.OrdinalIgnoreCase) ||
+                title.Contains("Telemetry", StringComparison.OrdinalIgnoreCase) ||
+                title.Contains("UWP", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            if (products.Contains("Server", StringComparison.OrdinalIgnoreCase) ||
+                products.Contains("Azure", StringComparison.OrdinalIgnoreCase) ||
+                products.Contains("Dynamic", StringComparison.OrdinalIgnoreCase) ||
+                products.Contains("ARM64", StringComparison.OrdinalIgnoreCase) ||
+                products.Contains("Mobile", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            if (Environment.Is64BitOperatingSystem &&
+                products.Contains("x86", StringComparison.OrdinalIgnoreCase) &&
+                !products.Contains("x64", StringComparison.OrdinalIgnoreCase) &&
+                !products.Contains("amd64", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            bool catOk = category switch
+            {
+                DriverCategory.Network when isBluetooth =>
+                    title.Contains("Bluetooth", StringComparison.OrdinalIgnoreCase) &&
+                    (classification.Contains("Other Hardware", StringComparison.OrdinalIgnoreCase) ||
+                     classification.Contains("Networking", StringComparison.OrdinalIgnoreCase) ||
+                     classification.Contains("Bluetooth", StringComparison.OrdinalIgnoreCase)),
+                DriverCategory.Network =>
+                    !title.Contains("Bluetooth", StringComparison.OrdinalIgnoreCase) &&
+                    (classification.Contains("Networking", StringComparison.OrdinalIgnoreCase) ||
+                     title.Contains("Net", StringComparison.OrdinalIgnoreCase)),
+                DriverCategory.Audio =>
+                    classification.Contains("Sound", StringComparison.OrdinalIgnoreCase) ||
+                    title.Contains("MEDIA", StringComparison.OrdinalIgnoreCase),
+                DriverCategory.GPU =>
+                    classification.Contains("Video", StringComparison.OrdinalIgnoreCase) ||
+                    classification.Contains("Display", StringComparison.OrdinalIgnoreCase),
+                DriverCategory.Motherboard =>
+                    !title.Contains("Audio", StringComparison.OrdinalIgnoreCase) &&
+                    !title.Contains("Bluetooth", StringComparison.OrdinalIgnoreCase) &&
+                    (classification.Contains("Other Hardware", StringComparison.OrdinalIgnoreCase) ||
+                     classification.Contains("System", StringComparison.OrdinalIgnoreCase)),
+                _ => true
+            };
+
+            if (!catOk) return false;
+
+            return IsCatalogProductsCompatible(products, osBuild);
+        }
+
+        private static bool IsCatalogProductsCompatible(string products, int osBuild)
+        {
+            bool isWin11 = osBuild >= 22000;
+            if (isWin11)
+            {
+                if (!products.Contains("Windows 11", StringComparison.OrdinalIgnoreCase) &&
+                    !products.Contains("Windows - Client", StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+
+                int minReqBuild = int.MaxValue;
+                if (products.Contains("21H2", StringComparison.OrdinalIgnoreCase)) minReqBuild = Math.Min(minReqBuild, 22000);
+                if (products.Contains("22H2", StringComparison.OrdinalIgnoreCase)) minReqBuild = Math.Min(minReqBuild, 22621);
+                if (products.Contains("23H2", StringComparison.OrdinalIgnoreCase)) minReqBuild = Math.Min(minReqBuild, 22631);
+                if (products.Contains("24H2", StringComparison.OrdinalIgnoreCase)) minReqBuild = Math.Min(minReqBuild, 26100);
+                if (products.Contains("25H2", StringComparison.OrdinalIgnoreCase)) minReqBuild = Math.Min(minReqBuild, 26200);
+                if (products.Contains("26H1", StringComparison.OrdinalIgnoreCase)) minReqBuild = Math.Min(minReqBuild, 27900);
+
+                return minReqBuild == int.MaxValue || osBuild >= minReqBuild;
+            }
+            else
+            {
+                // Windows 10 / Windows 10 Enterprise LTSC (ör. Build 19044): Asla Windows 11 veya "Windows - Client" (Win11+) paketini alma
+                if (!products.Contains("Windows 10", StringComparison.OrdinalIgnoreCase) ||
+                    products.Contains("Windows 11", StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+
+                int minReqBuild = int.MaxValue;
+                if (products.Contains("1507", StringComparison.OrdinalIgnoreCase) ||
+                    products.Contains("1511", StringComparison.OrdinalIgnoreCase) ||
+                    products.Contains("1607", StringComparison.OrdinalIgnoreCase) ||
+                    products.Contains("1703", StringComparison.OrdinalIgnoreCase) ||
+                    products.Contains("1709", StringComparison.OrdinalIgnoreCase))
+                {
+                    minReqBuild = Math.Min(minReqBuild, 10240);
+                }
+                if (products.Contains("1803", StringComparison.OrdinalIgnoreCase)) minReqBuild = Math.Min(minReqBuild, 17134);
+                if (products.Contains("1809", StringComparison.OrdinalIgnoreCase)) minReqBuild = Math.Min(minReqBuild, 17763);
+                if (products.Contains("1903", StringComparison.OrdinalIgnoreCase) ||
+                    products.Contains("19H1", StringComparison.OrdinalIgnoreCase)) minReqBuild = Math.Min(minReqBuild, 18362);
+                if (products.Contains("1909", StringComparison.OrdinalIgnoreCase) ||
+                    products.Contains("19H2", StringComparison.OrdinalIgnoreCase)) minReqBuild = Math.Min(minReqBuild, 18363);
+                if (products.Contains("Vibranium", StringComparison.OrdinalIgnoreCase) ||
+                    products.Contains("2004", StringComparison.OrdinalIgnoreCase) ||
+                    products.Contains("20H2", StringComparison.OrdinalIgnoreCase) ||
+                    products.Contains("21H1", StringComparison.OrdinalIgnoreCase) ||
+                    products.Contains("21H2", StringComparison.OrdinalIgnoreCase))
+                {
+                    minReqBuild = Math.Min(minReqBuild, 19041);
+                }
+                if (products.Contains("Cobalt", StringComparison.OrdinalIgnoreCase) ||
+                    products.Contains("22H2", StringComparison.OrdinalIgnoreCase))
+                {
+                    minReqBuild = Math.Min(minReqBuild, 19045);
+                }
+
+                return minReqBuild == int.MaxValue || osBuild >= minReqBuild;
+            }
+        }
+
+        private async Task<string?> ResolveCatalogDownloadUrlByIdAsync(string updateId, CancellationToken ct = default)
+        {
+            string postBody = "updateIDs=" + Uri.EscapeDataString($"[{{\"size\":0,\"languages\":\"\",\"uidInfo\":\"{updateId}\",\"updateID\":\"{updateId}\"}}]");
+            using var content = new StringContent(postBody, Encoding.UTF8, "application/x-www-form-urlencoded");
+            var dlResp = await _http.PostAsync("https://www.catalog.update.microsoft.com/DownloadDialog.aspx", content, ct);
+            if (!dlResp.IsSuccessStatusCode) return null;
+
+            string dlHtml = await dlResp.Content.ReadAsStringAsync(ct);
+            var cabMatch = Regex.Match(dlHtml, @"https?://[^\s'""<>]+\.cab", RegexOptions.IgnoreCase);
+            return cabMatch.Success ? cabMatch.Value : null;
         }
 
         private async Task<string?> ResolveMicrosoftCatalogCabUrlAsync(DriverInfo driver)
         {
             try
             {
-                bool isWin11 = Environment.OSVersion.Version.Build >= 22000;
-                string venDev = ExtractVendorDeviceKey(driver.HardwareId);
-                var queries = new List<string>();
-                if (!string.IsNullOrEmpty(venDev) && !string.IsNullOrEmpty(driver.LatestVersion))
-                    queries.Add($"{venDev} {driver.LatestVersion}");
-                if (!string.IsNullOrEmpty(venDev))
-                    queries.Add(venDev);
-                if (!string.IsNullOrEmpty(driver.WindowsUpdateTitle))
-                    queries.Add(driver.WindowsUpdateTitle);
-
-                foreach (string query in queries.Distinct())
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(12));
+                var candidate = await FindBestMicrosoftCatalogCandidateAsync(driver, cts.Token);
+                if (candidate != null)
                 {
-                    string searchUrl = "https://www.catalog.update.microsoft.com/Search.aspx?q=" + Uri.EscapeDataString(query);
-                    string html = await _http.GetStringAsync(searchUrl);
-                    var rows = Regex.Matches(html, @"<tr id=""([a-f0-9\-]{36})_R\d+""[\s\S]*?</tr>", RegexOptions.IgnoreCase);
-                    if (rows.Count == 0) continue;
-
-                    string? bestId = null;
-                    foreach (Match r in rows)
-                    {
-                        string id = r.Groups[1].Value;
-                        string rowText = Regex.Replace(r.Value, "<[^>]+>", " ");
-                        if (isWin11 && (rowText.Contains("Windows 11", StringComparison.OrdinalIgnoreCase) || rowText.Contains("Windows - Client", StringComparison.OrdinalIgnoreCase)))
-                        {
-                            bestId = id;
-                            break;
-                        }
-                        if (!isWin11 && (rowText.Contains("Windows 10", StringComparison.OrdinalIgnoreCase) || rowText.Contains("Windows - Client", StringComparison.OrdinalIgnoreCase)))
-                        {
-                            bestId = id;
-                            break;
-                        }
-                        bestId ??= id;
-                    }
-
-                    if (string.IsNullOrEmpty(bestId)) continue;
-
-                    string postBody = "updateIDs=" + Uri.EscapeDataString($"[{{\"size\":0,\"languages\":\"\",\"uidInfo\":\"{bestId}\",\"updateID\":\"{bestId}\"}}]");
-                    using var content = new StringContent(postBody, Encoding.UTF8, "application/x-www-form-urlencoded");
-                    var dlResp = await _http.PostAsync("https://www.catalog.update.microsoft.com/DownloadDialog.aspx", content);
-                    if (!dlResp.IsSuccessStatusCode) continue;
-
-                    string dlHtml = await dlResp.Content.ReadAsStringAsync();
-                    var cabMatch = Regex.Match(dlHtml, @"https?://[^\s'""<>]+\.cab", RegexOptions.IgnoreCase);
-                    if (cabMatch.Success)
-                    {
-                        return cabMatch.Value;
-                    }
+                    return await ResolveCatalogDownloadUrlByIdAsync(candidate.UpdateId, cts.Token);
                 }
             }
             catch (Exception ex)
@@ -1863,6 +2396,41 @@ namespace AlpNetPulse
                 if (infFiles.Length == 0)
                 {
                     return (false, "İndirilen WHQL paketi içinde .inf kurulum dosyası bulunamadı.");
+                }
+
+                // Kurulum öncesi donanım kimliği doğrulama kalkanı (uyumsuz OEM/yanlış cihaz paketini pnputil'e göndermeden durdur)
+                string venDev = ExtractVendorDeviceKey(driver.HardwareId);
+                var subsysMatch = Regex.Match(driver.HardwareId ?? "", @"SUBSYS_[0-9A-F]{8}", RegexOptions.IgnoreCase);
+                bool hwidVerifiedInInf = string.IsNullOrEmpty(venDev) && !subsysMatch.Success;
+                if (!hwidVerifiedInInf)
+                {
+                    foreach (string infFile in infFiles)
+                    {
+                        string infText = await File.ReadAllTextAsync(infFile);
+                        if (driver.Category == DriverCategory.Audio && subsysMatch.Success)
+                        {
+                            if (infText.Contains(subsysMatch.Value, StringComparison.OrdinalIgnoreCase))
+                            {
+                                hwidVerifiedInInf = true;
+                                break;
+                            }
+                        }
+                        else if (!string.IsNullOrEmpty(venDev))
+                        {
+                            string shortPair = Regex.Match(venDev, @"(?:VEN_[0-9A-F]{4}&DEV_[0-9A-F]{4}|VID_[0-9A-F]{4}&PID_[0-9A-F]{4})", RegexOptions.IgnoreCase).Value;
+                            if (infText.Contains(venDev, StringComparison.OrdinalIgnoreCase) ||
+                                (!string.IsNullOrEmpty(shortPair) && infText.Contains(shortPair, StringComparison.OrdinalIgnoreCase)))
+                            {
+                                hwidVerifiedInInf = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (!hwidVerifiedInInf)
+                    {
+                        return (false, $"İndirilen WHQL paketi bu donanımın kimliğiyle ({driver.HardwareId}) eşleşmediği için güvenlik amacıyla kurulum durduruldu.");
+                    }
                 }
 
                 progressCallback?.Invoke(82, "İmzalı WHQL sürücüsü Windows sürücü deposuna yükleniyor (pnputil)...");
@@ -1916,6 +2484,49 @@ namespace AlpNetPulse
             }
         }
 
+        public static bool IsValidDriverUpgrade(DriverInfo driver, string candidateVer, DateTime candidateDate)
+        {
+            if (driver == null || driver.IsBiosFirmware) return false;
+            if (string.IsNullOrWhiteSpace(candidateVer)) return false;
+            if (string.Equals(driver.CurrentVersion?.Trim(), candidateVer.Trim(), StringComparison.OrdinalIgnoreCase)) return false;
+            if (!IsNewerVersion(candidateVer, driver.CurrentVersion ?? "")) return false;
+
+            // Realtek Ağ Adaptörü Çapraz Dal & OS Koruması:
+            // NDIS 6.x (10.x - örn. v10.77.50.807) vs NetAdapterCx 2.x (1125.x / 1168.x)
+            if (driver.Category == DriverCategory.Network &&
+                (driver.CurrentVersion ?? "").StartsWith("10.", StringComparison.OrdinalIgnoreCase) &&
+                (candidateVer.StartsWith("1168.", StringComparison.OrdinalIgnoreCase) ||
+                 candidateVer.StartsWith("1125.", StringComparison.OrdinalIgnoreCase) ||
+                 candidateVer.StartsWith("1166.", StringComparison.OrdinalIgnoreCase)))
+            {
+                bool isWin11 = Environment.OSVersion.Version.Build >= 22000;
+                if (!isWin11) return false; // Windows 10/LTSC asla 11xx NetAdapterCx alamaz
+
+                // Win11'de 10.x dalından 11xx dalına ancak aday sürücü tarihi GERÇEKTEN daha yeni ise geçilir (2024 1168 asla Temmuz/Ekim 2025 10.x'in önüne geçemez)
+                if (candidateDate == DateTime.MinValue) return false;
+                if (driver.CurrentDate > DateTime.MinValue && candidateDate <= driver.CurrentDate.AddDays(3))
+                    return false;
+            }
+
+            // Evrensel Tarih Güvenlik Kilidi: Yüklü sürücünün tarihi adayın gerçek yayın tarihinden >14 gün daha yeniyse eski sürücüyü "yeni" sanmayı engelle
+            if (driver.CurrentDate > DateTime.MinValue && candidateDate > DateTime.MinValue &&
+                candidateDate < driver.CurrentDate.AddDays(-14))
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        private static DateTime ParseWmiDriverDate(string? wmiDate)
+        {
+            if (string.IsNullOrWhiteSpace(wmiDate) || wmiDate.Length < 8)
+                return DateTime.MinValue;
+            if (DateTime.TryParseExact(wmiDate.Substring(0, 8), "yyyyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
+                return dt;
+            return DateTime.MinValue;
+        }
+
         public static bool IsNewerVersion(string latestVer, string currentVer)
         {
             try
@@ -1923,13 +2534,9 @@ namespace AlpNetPulse
                 if (string.IsNullOrWhiteSpace(latestVer) || string.IsNullOrWhiteSpace(currentVer)) return false;
                 if (string.Equals(latestVer.Trim(), currentVer.Trim(), StringComparison.OrdinalIgnoreCase)) return false;
 
-                string cleanLatest = Regex.Replace(latestVer, @"[^\d.]", "");
-                string cleanCurrent = Regex.Replace(currentVer, @"[^\d.]", "");
-
-                if (Version.TryParse(cleanLatest, out var vLatest) && Version.TryParse(cleanCurrent, out var vCurrent))
-                {
-                    return vLatest > vCurrent;
-                }
+                string cleanLatest = Regex.Replace(latestVer, @"[^\d.]", "").Trim('.');
+                string cleanCurrent = Regex.Replace(currentVer, @"[^\d.]", "").Trim('.');
+                if (string.IsNullOrEmpty(cleanLatest) || string.IsNullOrEmpty(cleanCurrent)) return false;
 
                 var partsLatest = cleanLatest.Split('.', StringSplitOptions.RemoveEmptyEntries);
                 var partsCurrent = cleanCurrent.Split('.', StringSplitOptions.RemoveEmptyEntries);
@@ -2074,7 +2681,7 @@ namespace AlpNetPulse
                 {
                     Timeout = TimeSpan.FromMinutes(10)
                 };
-                dlClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 AlpNetPulse/2.3.6");
+                dlClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 AlpNetPulse/2.3.7");
 
                 using var response = await dlClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
                 response.EnsureSuccessStatusCode();

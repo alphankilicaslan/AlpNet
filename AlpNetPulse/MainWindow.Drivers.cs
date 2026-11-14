@@ -88,7 +88,7 @@ namespace AlpNetPulse
         {
             foreach (var d in drivers)
             {
-                if (string.Equals(d.CurrentVersion, d.LatestVersion, StringComparison.OrdinalIgnoreCase) || !DriverManager.IsNewerVersion(d.LatestVersion, d.CurrentVersion))
+                if (!DriverManager.IsValidDriverUpgrade(d, d.LatestVersion, d.LatestDate))
                 {
                     d.IsUpdateAvailable = false;
                 }
@@ -216,7 +216,7 @@ namespace AlpNetPulse
 
             foreach (var drv in filtered)
             {
-                if (string.Equals(drv.CurrentVersion, drv.LatestVersion, StringComparison.OrdinalIgnoreCase) || !DriverManager.IsNewerVersion(drv.LatestVersion, drv.CurrentVersion))
+                if (!DriverManager.IsValidDriverUpgrade(drv, drv.LatestVersion, drv.LatestDate))
                 {
                     drv.IsUpdateAvailable = false;
                     drv.Status = DriverStatus.UpToDate;
