@@ -15,7 +15,7 @@ namespace AlpNetPulse
     public class WarpManager
     {
         // ═══════════════════════════════════════════════════════════
-        //  SAF HEDEF LİSTESİ: YALNIZCA DISCORD VE ROBLOX (TÜM ALT ALANLAR DAHİL)
+        //  SAF HEDEF LİSTESİ: DISCORD, ROBLOX VE STEAM WEB ARAYÜZÜ
         // ═══════════════════════════════════════════════════════════
         private static readonly string[] TargetDomains = new[]
         {
@@ -25,7 +25,10 @@ namespace AlpNetPulse
             "router.discordapp.net", "latency.discord.media",
             "updates.discord.com", "dl.discordapp.net", "discord.gift", "discord.media",
             "discordcdn.com", "discord-attachments-uploads-prd.storage.googleapis.com",
-            "roblox.com", "rbxcdn.com", "robloxlabs.com", "setup.rbxcdn.com", "clientsettings.roblox.com"
+            "roblox.com", "rbxcdn.com", "robloxlabs.com", "setup.rbxcdn.com", "clientsettings.roblox.com",
+            "store.steampowered.com", "steamcommunity.com", "api.steampowered.com",
+            "store.fastly.steamstatic.com", "shared.fastly.steamstatic.com", "avatars.fastly.steamstatic.com",
+            "store.cloudflare.steamstatic.com", "shared.cloudflare.steamstatic.com"
         };
 
         private readonly string _resDir;
@@ -73,7 +76,7 @@ namespace AlpNetPulse
             {
                 Timeout = TimeSpan.FromSeconds(15)
             };
-            _http.DefaultRequestHeaders.Add("User-Agent", "AlpNetPulse/2.3.7");
+            _http.DefaultRequestHeaders.Add("User-Agent", "AlpNetPulse/2.3.6");
 
             LoadUsageToday();
         }
@@ -84,7 +87,7 @@ namespace AlpNetPulse
 @"[Interface]
 PrivateKey = ID6Va+b6e5vusYdSh8PkhB+Z8gOVPZFtq2/fni+1K1Q=
 Address = 172.16.0.2/32, 2606:4700:110:8369:e40f:6f09:1250:1c64/128
-MTU = 1280
+MTU = 1400
 
 [Peer]
 PublicKey = bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
@@ -203,9 +206,13 @@ PersistentKeepalive = 15
                 }
                 else if (isRunning && configUpdated)
                 {
-                    logCallback("WARP tüneli şifreli Cloudflare DNS ile yenileniyor...");
+                    logCallback("WARP tüneli güncel profille yenileniyor...");
                     await ExecuteCommandAsync("net", "stop wiresock-client-service");
                     await Task.Delay(150);
+                    await ExecuteCommandAsync(wireSockExe, "uninstall");
+                    await Task.Delay(100);
+                    await ExecuteCommandAsync(wireSockExe, installArgs);
+                    await Task.Delay(100);
                     int restartRes = await ExecuteCommandAsync("net", "start wiresock-client-service");
                     if (restartRes != 0)
                     {
@@ -314,6 +321,9 @@ PersistentKeepalive = 15
                         string psScript = 
                             "Get-NetAdapter | Where-Object Status -eq 'Up' | ForEach-Object { " +
                             "  Set-DnsClientServerAddress -InterfaceIndex $_.InterfaceIndex -ResetServerAddresses -ErrorAction SilentlyContinue " +
+                            "}; " +
+                            "Get-DnsClientServerAddress -AddressFamily IPv6 -ErrorAction SilentlyContinue | Where-Object { $_.ServerAddresses -match '^fec0:' } | ForEach-Object { " +
+                            "  netsh interface ipv6 delete dnsservers $_.InterfaceIndex all 2>$null | Out-Null " +
                             "}; " +
                             "if (Get-Command Set-DnsClientDohServerAddress -ErrorAction SilentlyContinue) { " +
                             "  Set-DnsClientDohServerAddress -ServerAddress '1.1.1.1' -AutoUpgrade $false -ErrorAction SilentlyContinue; " +
@@ -472,6 +482,8 @@ PersistentKeepalive = 15
                     // Roblox
                     "roblox", "RobloxPlayerBeta.exe", "RobloxPlayerInstaller.exe",
                     "RobloxStudioBeta.exe", "RobloxStudioInstaller.exe", "RobloxCrashHandler.exe",
+                    // Steam Web Arayüzü (Mağaza, Topluluk, Profil, Envanter CEF/Chromium süreci; steam.exe oyun indirmeleri hariç)
+                    "steamwebhelper", "steamwebhelper.exe",
                     // AlpNet Pulse
                     "AlpNet.Pulse.exe", "AlpNetPulse.exe"
                 };
@@ -505,7 +517,9 @@ PersistentKeepalive = 15
                     "EasyAntiCheat", "EasyAntiCheat.exe",
                     "EasyAntiCheat_EOS", "EasyAntiCheat_EOS.exe",
                     "Steam", "Steam.exe",
-                    "steamwebhelper", "steamwebhelper.exe"
+                    "steamservice", "steamservice.exe",
+                    "GameOverlayUI", "GameOverlayUI.exe",
+                    "gameoverlayui64", "gameoverlayui64.exe"
                 };
                 var disallowedAppsLine = $"DisallowedApps = {string.Join(", ", disallowedApps.Distinct(StringComparer.OrdinalIgnoreCase))}";
                 var disallowedIPsLine = "DisallowedIPs = 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16";
@@ -568,10 +582,10 @@ PersistentKeepalive = 15
                     if (trimmed.StartsWith("[Peer]", StringComparison.OrdinalIgnoreCase))
                     {
                         newLines.Add("DNS = 1.1.1.1, 1.0.0.1");
-                        // [Interface] bitmeden MTU eklenmediyse araya enjekte et (1280 IPv6 Safe MTU)
+                        // [Interface] bitmeden MTU eklenmediyse araya enjekte et (1400 MTU: Chromium QUIC INITIAL 1350-byte UDP paketlerinin düşmesini önler)
                         if (!mtuAdded)
                         {
-                            newLines.Add("MTU = 1280");
+                            newLines.Add("MTU = 1400");
                             mtuAdded = true;
                         }
 
@@ -582,7 +596,7 @@ PersistentKeepalive = 15
 
                     if (trimmed.StartsWith("MTU", StringComparison.OrdinalIgnoreCase))
                     {
-                        newLines.Add("MTU = 1280");
+                        newLines.Add("MTU = 1400");
                         mtuAdded = true;
                         continue;
                     }
@@ -706,7 +720,7 @@ PersistentKeepalive = 15
 
                 _ = Task.Run(SetCloudflareDnsAsync);
 
-                logCallback?.Invoke(enable ? "🌐 Tarayıcı Tüneli Açık!" : "🌐 Tarayıcı Tüneli Kapalı (Sadece Discord & Roblox)");
+                logCallback?.Invoke(enable ? "🌐 Tarayıcı Tüneli Açık!" : "🌐 Tarayıcı Tüneli Kapalı (Discord, Roblox & Steam Web)");
                 return true;
             }
             catch (Exception ex)
@@ -938,8 +952,10 @@ PersistentKeepalive = 15
                     string psCmd = 
                         "$adapters = Get-NetAdapter | Where-Object Status -eq 'Up'; " +
                         "$adapters | ForEach-Object { " +
-                        "  Set-DnsClientServerAddress -InterfaceIndex $_.InterfaceIndex -ServerAddresses ('1.1.1.1', '1.0.0.1') -ErrorAction SilentlyContinue; " +
-                        "  Set-DnsClientServerAddress -InterfaceIndex $_.InterfaceIndex -Family IPv6 -ResetServerAddresses -ErrorAction SilentlyContinue " +
+                        "  Set-DnsClientServerAddress -InterfaceIndex $_.InterfaceIndex -ServerAddresses ('1.1.1.1', '1.0.0.1') -ErrorAction SilentlyContinue " +
+                        "}; " +
+                        "Get-DnsClientServerAddress -AddressFamily IPv6 -ErrorAction SilentlyContinue | Where-Object { $_.ServerAddresses.Count -gt 0 } | ForEach-Object { " +
+                        "  netsh interface ipv6 delete dnsservers $_.InterfaceIndex all 2>$null | Out-Null " +
                         "}; " +
                         "if (Get-Command Set-DnsClientDohServerAddress -ErrorAction SilentlyContinue) { " +
                         "  Set-DnsClientDohServerAddress -ServerAddress '1.1.1.1' -AutoUpgrade $false -ErrorAction SilentlyContinue; " +

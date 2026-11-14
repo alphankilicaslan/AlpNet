@@ -119,7 +119,7 @@ namespace AlpNetPulse
             {
                 Timeout = TimeSpan.FromSeconds(20)
             };
-            _http.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 AlpNetPulse/2.3.7");
+            _http.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 AlpNetPulse/2.3.6");
 
             string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
             _driverDataDir = Path.Combine(localAppData, "AlpNet", "Drivers");
@@ -2681,7 +2681,7 @@ namespace AlpNetPulse
                 {
                     Timeout = TimeSpan.FromMinutes(10)
                 };
-                dlClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 AlpNetPulse/2.3.7");
+                dlClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 AlpNetPulse/2.3.6");
 
                 using var response = await dlClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
                 response.EnsureSuccessStatusCode();

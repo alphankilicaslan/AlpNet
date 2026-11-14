@@ -97,7 +97,7 @@ namespace AlpNetPulse
 
 
         // Uygulamanın KENDİ sürümü (Her Güncellemede burayı artırın)
-        private const string BASE_VERSION = "2.3.7";
+        private const string BASE_VERSION = "2.3.6";
 
         private string CleanVersion(string v)
         {
@@ -4206,7 +4206,7 @@ namespace AlpNetPulse
                     BypassStatusBadge.Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(51, 0, 255, 135)); // #3300FF87
                     BypassStatusText.Text = "WARP AKTİF";
                     BypassStatusText.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0, 255, 135));
-                    BypassStatusVal.Text = "Discord ve Roblox WARP tünelinden geçiyor (Oyunlar 0 Ping).";
+                    BypassStatusVal.Text = "Discord, Roblox ve Steam Web WARP tünelinde (Oyunlar 0 Ping).";
                     
                     var settings = PulseAppSettings.Load();
                     settings.AutoBypassEnabled = true;
