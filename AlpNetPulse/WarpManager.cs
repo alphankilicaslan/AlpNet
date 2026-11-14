@@ -73,7 +73,7 @@ namespace AlpNetPulse
             {
                 Timeout = TimeSpan.FromSeconds(15)
             };
-            _http.DefaultRequestHeaders.Add("User-Agent", "AlpNetPulse/2.3.4");
+            _http.DefaultRequestHeaders.Add("User-Agent", "AlpNetPulse/2.3.5");
 
             LoadUsageToday();
         }

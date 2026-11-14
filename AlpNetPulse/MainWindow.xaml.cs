@@ -89,6 +89,7 @@ namespace AlpNetPulse
         private string _updateUrl = "";
         private string _remoteVersion = "";
         private bool _versionBannerShown = false;
+        private DateTime _lastUpdateAttemptUtc = DateTime.MinValue;
 
         // LibreHardwareMonitor
         private Computer? _computer;
@@ -96,7 +97,7 @@ namespace AlpNetPulse
 
 
         // Uygulamanın KENDİ sürümü (Her Güncellemede burayı artırın)
-        private const string BASE_VERSION = "2.3.4";
+        private const string BASE_VERSION = "2.3.5";
 
         private string CleanVersion(string v)
         {
@@ -275,9 +276,22 @@ namespace AlpNetPulse
         {
             try
             {
+                bool isAutostart = Environment.GetCommandLineArgs().Any(a => a.Equals("/autostart", StringComparison.OrdinalIgnoreCase));
+                if (isAutostart || !System.Net.NetworkInformation.NetworkInterface.GetIsNetworkAvailable())
+                {
+                    for (int i = 0; i < 10; i++)
+                    {
+                        if (System.Net.NetworkInformation.NetworkInterface.GetIsNetworkAvailable())
+                            break;
+                        await Task.Delay(500);
+                    }
+                    if (isAutostart)
+                        await Task.Delay(1500);
+                }
+
                 AlpNetTelemetryService.Instance.Info("BAŞLATMA", "Firebase appstate.json denetleniyor...");
                 string firebaseUrl = "https://alpnet-d0bc4-default-rtdb.europe-west1.firebasedatabase.app/appstate.json?auth=ExNWZwF2CkByKFILhfQ2BbTpuxYFlFAUO8quWwfc";
-                using (var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(6)))
+                using (var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(15)))
                 {
                     var response = await _httpClient.GetAsync(firebaseUrl, cts.Token);
                     if (response.IsSuccessStatusCode)
@@ -293,7 +307,7 @@ namespace AlpNetPulse
 
                                 AlpNetTelemetryService.Instance.Info("GÜNCELLEME", $"Sunucu Sürümü: v{remoteVer}, Mevcut Sürüm: v{currentVer}");
 
-                                if (remoteVer > currentVer && !_isUpdating)
+                                if (remoteVer > currentVer && !_isUpdating && (DateTime.UtcNow - _lastUpdateAttemptUtc).TotalSeconds >= 45)
                                 {
                                     _versionBannerShown = true;
                                     _remoteVersion = CleanVersion(state.version);
@@ -559,7 +573,7 @@ namespace AlpNetPulse
                                 {
                                     var rVer = NormalizeVersion(state.version);
                                     var cVer = NormalizeVersion(BASE_VERSION);
-                                    if (rVer > cVer && !_versionBannerShown && !_isUpdating)
+                                    if (rVer > cVer && !_versionBannerShown && !_isUpdating && (DateTime.UtcNow - _lastUpdateAttemptUtc).TotalSeconds >= 45)
                                     {
                                         _versionBannerShown = true;
                                         _remoteVersion = CleanVersion(state.version);
@@ -669,6 +683,7 @@ namespace AlpNetPulse
         {
             if (_isUpdating) return;
             _isUpdating = true;
+            _lastUpdateAttemptUtc = DateTime.UtcNow;
 
             try
             {
@@ -698,47 +713,100 @@ namespace AlpNetPulse
                 };
                 downloadClient.DefaultRequestHeaders.Add("User-Agent", $"AlpNetPulse/{BASE_VERSION}");
 
-                // Bypass CDN cache
-                string noCacheUrl = updateUrl + (updateUrl.Contains("?") ? "&" : "?") + "t=" + DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-                using var request = new HttpRequestMessage(HttpMethod.Get, noCacheUrl);
-                request.Headers.CacheControl = new System.Net.Http.Headers.CacheControlHeaderValue { NoCache = true, NoStore = true };
-
-                AlpNetTelemetryService.Instance.Info("GÜNCELLEME", $"İndirme isteği gönderiliyor: {noCacheUrl}");
-
-                using (var response = await downloadClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead))
+                var candidateUrls = new List<string> { updateUrl, updateUrl };
+                if (updateUrl.StartsWith("https://github.com/alphankilicaslan/AlpNet/releases/download/", StringComparison.OrdinalIgnoreCase) &&
+                    !updateUrl.Contains("/releases/download/Update/", StringComparison.OrdinalIgnoreCase))
                 {
-                    response.EnsureSuccessStatusCode();
-                    long? totalBytes = response.Content.Headers.ContentLength;
-                    AlpNetTelemetryService.Instance.Info("GÜNCELLEME", $"Sunucu yanıt verdi: HTTP {(int)response.StatusCode}. Toplam Boyut: {totalBytes ?? -1} bayt");
+                    candidateUrls.Add("https://github.com/alphankilicaslan/AlpNet/releases/download/Update/AlpNet.Pulse.exe");
+                }
+                else
+                {
+                    candidateUrls.Add(updateUrl);
+                }
 
-                    using (var stream = await response.Content.ReadAsStreamAsync())
-                    using (var fs = new System.IO.FileStream(tempUpdateExe, System.IO.FileMode.Create, System.IO.FileAccess.Write, System.IO.FileShare.None))
+                bool downloadSucceeded = false;
+                Exception? lastDownloadEx = null;
+
+                for (int attempt = 0; attempt < candidateUrls.Count; attempt++)
+                {
+                    string targetUrl = candidateUrls[attempt];
+                    if (attempt > 0)
                     {
-                        byte[] buffer = new byte[81920];
-                        long totalRead = 0;
-                        int bytesRead;
-                        DateTime lastReport = DateTime.UtcNow;
-                        int lastReportedPercent = -1;
+                        int waitMs = attempt == 1 ? 3000 : 5000;
+                        ShowInAppMessage($"🔄 Bağlantı bekleniyor, güncelleme yeniden deneniyor ({attempt + 1}/{candidateUrls.Count})...");
+                        await Task.Delay(waitMs);
+                    }
 
-                        while ((bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                    try
+                    {
+                        if (System.IO.File.Exists(tempUpdateExe))
                         {
-                            await fs.WriteAsync(buffer, 0, bytesRead);
-                            totalRead += bytesRead;
+                            try { System.IO.File.Delete(tempUpdateExe); } catch { }
+                        }
 
-                            if (totalBytes.HasValue && totalBytes.Value > 0 && (DateTime.UtcNow - lastReport).TotalMilliseconds > 250)
+                        // Bypass CDN cache
+                        string noCacheUrl = targetUrl + (targetUrl.Contains("?") ? "&" : "?") + "t=" + DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                        using var request = new HttpRequestMessage(HttpMethod.Get, noCacheUrl);
+                        request.Headers.CacheControl = new System.Net.Http.Headers.CacheControlHeaderValue { NoCache = true, NoStore = true };
+
+                        AlpNetTelemetryService.Instance.Info("GÜNCELLEME", $"İndirme isteği gönderiliyor (Deneme {attempt + 1}/{candidateUrls.Count}): {noCacheUrl}");
+
+                        using (var response = await downloadClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead))
+                        {
+                            response.EnsureSuccessStatusCode();
+                            long? totalBytes = response.Content.Headers.ContentLength;
+                            AlpNetTelemetryService.Instance.Info("GÜNCELLEME", $"Sunucu yanıt verdi: HTTP {(int)response.StatusCode}. Toplam Boyut: {totalBytes ?? -1} bayt");
+
+                            using (var stream = await response.Content.ReadAsStreamAsync())
+                            using (var fs = new System.IO.FileStream(tempUpdateExe, System.IO.FileMode.Create, System.IO.FileAccess.Write, System.IO.FileShare.None))
                             {
-                                int percent = (int)((totalRead * 100) / totalBytes.Value);
-                                ShowInAppMessage($"🔄 Yeni sürüm indiriliyor: %{percent} ({totalRead / 1024 / 1024} MB / {totalBytes.Value / 1024 / 1024} MB)...");
-                                lastReport = DateTime.UtcNow;
+                                byte[] buffer = new byte[81920];
+                                long totalRead = 0;
+                                int bytesRead;
+                                DateTime lastReport = DateTime.UtcNow;
+                                int lastReportedPercent = -1;
 
-                                if (percent >= lastReportedPercent + 25)
+                                while ((bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length)) > 0)
                                 {
-                                    lastReportedPercent = percent;
-                                    AlpNetTelemetryService.Instance.Info("GÜNCELLEME", $"İndirme ilerlemesi: %{percent} ({totalRead / 1024 / 1024} MB / {totalBytes.Value / 1024 / 1024} MB)");
+                                    await fs.WriteAsync(buffer, 0, bytesRead);
+                                    totalRead += bytesRead;
+
+                                    if (totalBytes.HasValue && totalBytes.Value > 0 && (DateTime.UtcNow - lastReport).TotalMilliseconds > 250)
+                                    {
+                                        int percent = (int)((totalRead * 100) / totalBytes.Value);
+                                        ShowInAppMessage($"🔄 Yeni sürüm indiriliyor: %{percent} ({totalRead / 1024 / 1024} MB / {totalBytes.Value / 1024 / 1024} MB)...");
+                                        lastReport = DateTime.UtcNow;
+
+                                        if (percent >= lastReportedPercent + 25)
+                                        {
+                                            lastReportedPercent = percent;
+                                            AlpNetTelemetryService.Instance.Info("GÜNCELLEME", $"İndirme ilerlemesi: %{percent} ({totalRead / 1024 / 1024} MB / {totalBytes.Value / 1024 / 1024} MB)");
+                                        }
+                                    }
                                 }
                             }
                         }
+
+                        var downloadedInfo = new System.IO.FileInfo(tempUpdateExe);
+                        if (!downloadedInfo.Exists || downloadedInfo.Length < 10000000)
+                        {
+                            throw new InvalidDataException($"İndirilen dosya boyutu geçersiz ({(downloadedInfo.Exists ? downloadedInfo.Length : 0)} bayt).");
+                        }
+
+                        downloadSucceeded = true;
+                        break;
                     }
+                    catch (Exception dlEx)
+                    {
+                        lastDownloadEx = dlEx;
+                        try { if (System.IO.File.Exists(tempUpdateExe)) System.IO.File.Delete(tempUpdateExe); } catch { }
+                        AlpNetTelemetryService.Instance.Warn("GÜNCELLEME", $"İndirme denemesi {attempt + 1}/{candidateUrls.Count} başarısız ({targetUrl}): {dlEx.Message}");
+                    }
+                }
+
+                if (!downloadSucceeded)
+                {
+                    throw lastDownloadEx ?? new Exception("Tüm güncelleme indirme denemeleri başarısız oldu.");
                 }
 
                 var fileInfo = new System.IO.FileInfo(tempUpdateExe);
@@ -746,6 +814,7 @@ namespace AlpNetPulse
                 {
                     AlpNetTelemetryService.Instance.Error("GÜNCELLEME", $"İndirilen güncelleme dosyası geçersiz veya bozuk! Boyut: {(fileInfo.Exists ? fileInfo.Length : 0)} bayt");
                     _versionBannerShown = false;
+                    try { if (fileInfo.Exists) System.IO.File.Delete(tempUpdateExe); } catch { }
                     ShowInAppMessage("⚠️ İndirilen güncelleme dosyası doğrulanamadı.");
                     _ = Task.Delay(4000).ContinueWith(_ => Dispatcher.Invoke(() => { InAppMessageOverlay.Visibility = Visibility.Collapsed; }));
                     return;
@@ -857,6 +926,7 @@ namespace AlpNetPulse
             }
             finally
             {
+                _lastUpdateAttemptUtc = DateTime.UtcNow;
                 _isUpdating = false;
             }
         }
@@ -1717,6 +1787,8 @@ namespace AlpNetPulse
         {
             if (string.IsNullOrEmpty(_deviceId)) return false;
 
+            bool keygenAuthorized = false;
+
             try
             {
                 // 1. Önce /users/{_deviceId}.json kontrol et (Keygen veya Admin doğrudan lisans ataması)
@@ -1741,7 +1813,7 @@ namespace AlpNetPulse
                                         _licenseState.LicenseKey = rKey;
                                         SaveLicenseConfig();
                                         AlpNetTelemetryService.Instance.Info("LİSANS", $"Keygen / Bulut Lisansı başarıyla doğrulandı: {_deviceId}");
-                                        return true;
+                                        keygenAuthorized = true;
                                     }
                                 }
                             }
@@ -1750,17 +1822,17 @@ namespace AlpNetPulse
                 }
                 catch { }
 
-                // 2. AlpTogether kullanıcıları havuzunu kontrol et
+                // 2. AlpTogether kullanıcıları havuzunu kontrol et (_alpTogetherUserId & AdminAlias senkronizasyonu dahil)
                 string firebaseUrl = "https://alpnet-d0bc4-default-rtdb.europe-west1.firebasedatabase.app/alptogether/users.json?auth=ExNWZwF2CkByKFILhfQ2BbTpuxYFlFAUO8quWwfc";
                 using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
                 var resp = await _httpClient.GetAsync(firebaseUrl, cts.Token);
-                if (!resp.IsSuccessStatusCode) return false;
+                if (!resp.IsSuccessStatusCode) return keygenAuthorized;
 
                 string json = await resp.Content.ReadAsStringAsync();
-                if (string.IsNullOrWhiteSpace(json) || json == "null") return false;
+                if (string.IsNullOrWhiteSpace(json) || json == "null") return keygenAuthorized;
 
                 var users = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json);
-                if (users == null) return false;
+                if (users == null) return keygenAuthorized;
 
                 foreach (var kvp in users)
                 {
@@ -1791,6 +1863,12 @@ namespace AlpNetPulse
                         {
                             AlpNetTelemetryService.Instance.AdminAlias = aliasProp.GetString();
                         }
+
+                        if (keygenAuthorized)
+                        {
+                            return true;
+                        }
+
                         if (user.TryGetProperty("appPermissions", out var perms) &&
                             perms.TryGetProperty("alpnet-pulse", out var pulsePerm))
                         {
@@ -1826,7 +1904,7 @@ namespace AlpNetPulse
             }
             catch { }
 
-            return false;
+            return keygenAuthorized;
         }
 
         private async void CheckAlpTogether_Click(object sender, RoutedEventArgs e)
@@ -2368,6 +2446,32 @@ namespace AlpNetPulse
                     string json = JsonSerializer.Serialize(data);
                     var content = new StringContent(json, Encoding.UTF8, "application/json");
                     await client.PatchAsync(firebaseUrl, content); // Patch kullanarak veriyi Güncelliyoruz
+
+                    try
+                    {
+                        string targetKey = !string.IsNullOrEmpty(_alpTogetherUserId) ? _alpTogetherUserId : _deviceId;
+                        string atUrl = $"https://alpnet-d0bc4-default-rtdb.europe-west1.firebasedatabase.app/alptogether/users/{targetKey}.json?auth=ExNWZwF2CkByKFILhfQ2BbTpuxYFlFAUO8quWwfc";
+                        var atPresence = new Dictionary<string, object>
+                        {
+                            ["version"] = BASE_VERSION,
+                            ["clientVersion"] = BASE_VERSION,
+                            ["alpnet-pulse"] = BASE_VERSION,
+                            ["last_seen"] = DateTime.UtcNow.ToString("o"),
+                            ["last_error"] = AlpNetTelemetryService.Instance.LastError ?? "",
+                            ["machine_name"] = Environment.MachineName,
+                            ["pc_user"] = Environment.UserName,
+                            ["warpActive"] = data.warp_active,
+                            ["warp_active"] = data.warp_active,
+                            ["installedAppVersions"] = new Dictionary<string, string>
+                            {
+                                ["alpnet-pulse"] = BASE_VERSION,
+                                ["alpnet"] = BASE_VERSION
+                            }
+                        };
+                        using var atContent = new StringContent(JsonSerializer.Serialize(atPresence), Encoding.UTF8, "application/json");
+                        await client.PatchAsync(atUrl, atContent);
+                    }
+                    catch { }
                 }
             }
             catch { }
@@ -2391,20 +2495,22 @@ namespace AlpNetPulse
                 await _httpClient.PatchAsync(firebaseUrl, content);
                 try
                 {
-                    if (string.IsNullOrEmpty(_alpTogetherUserId)) return;
-                    string atUrl = $"https://alpnet-d0bc4-default-rtdb.europe-west1.firebasedatabase.app/alptogether/users/{_alpTogetherUserId}.json?auth=ExNWZwF2CkByKFILhfQ2BbTpuxYFlFAUO8quWwfc";
-                    var atData = new
+                    string targetKey = !string.IsNullOrEmpty(_alpTogetherUserId) ? _alpTogetherUserId : _deviceId;
+                    string atUrl = $"https://alpnet-d0bc4-default-rtdb.europe-west1.firebasedatabase.app/alptogether/users/{targetKey}.json?auth=ExNWZwF2CkByKFILhfQ2BbTpuxYFlFAUO8quWwfc";
+                    var atData = new Dictionary<string, object>
                     {
-                        warpActive = (_warpManager != null && _warpManager.IsActive) || WarpManager.IsWireSockServiceRunning(),
-                        warp_active = (_warpManager != null && _warpManager.IsActive) || WarpManager.IsWireSockServiceRunning(),
-                        warpStartedAt = _warpManager?.WarpStartedAt?.ToString("o") ?? "",
-                        warpStoppedAt = _warpManager?.WarpStoppedAt?.ToString("o") ?? "",
-                        warpTotalHoursToday = Math.Round(_warpManager?.WarpTotalHoursToday ?? 0, 2),
-                        version = BASE_VERSION,
-                        machine_name = Environment.MachineName,
-                        pc_user = Environment.UserName,
-                        last_seen = DateTime.UtcNow.ToString("o"),
-                        installedAppVersions = new Dictionary<string, string>
+                        ["warpActive"] = (_warpManager != null && _warpManager.IsActive) || WarpManager.IsWireSockServiceRunning(),
+                        ["warp_active"] = (_warpManager != null && _warpManager.IsActive) || WarpManager.IsWireSockServiceRunning(),
+                        ["warpStartedAt"] = _warpManager?.WarpStartedAt?.ToString("o") ?? "",
+                        ["warpStoppedAt"] = _warpManager?.WarpStoppedAt?.ToString("o") ?? "",
+                        ["warpTotalHoursToday"] = Math.Round(_warpManager?.WarpTotalHoursToday ?? 0, 2),
+                        ["version"] = BASE_VERSION,
+                        ["clientVersion"] = BASE_VERSION,
+                        ["alpnet-pulse"] = BASE_VERSION,
+                        ["machine_name"] = Environment.MachineName,
+                        ["pc_user"] = Environment.UserName,
+                        ["last_seen"] = DateTime.UtcNow.ToString("o"),
+                        ["installedAppVersions"] = new Dictionary<string, string>
                         {
                             ["alpnet-pulse"] = BASE_VERSION,
                             ["alpnet"] = BASE_VERSION

@@ -29,7 +29,7 @@ namespace AlpNetPulse
         private const string FIREBASE_AUTH_SECRET = "ExNWZwF2CkByKFILhfQ2BbTpuxYFlFAUO8quWwfc";
         public const string APP_ID = "alpnet-pulse";
         public const string APP_NAME = "AlpNet Pulse";
-        public const string APP_VERSION = "2.3.4";
+        public const string APP_VERSION = "2.3.5";
 
         private readonly HttpClient _http;
         private readonly string _logsDir;
@@ -412,6 +412,48 @@ namespace AlpNetPulse
                     using var atIndexContent = new StringContent(indexJson, Encoding.UTF8, "application/json");
                     await _http.PutAsync(BuildFirebaseUrl($"alptogether/telemetry/user_index/{AlpTogetherUserId}.json"), atIndexContent);
                 }
+
+                // Ana kullanıcı düğümlerini güncel sürüm ve temiz hata durumuyla senkronize et
+                try
+                {
+                    var userSyncPatch = new Dictionary<string, object>
+                    {
+                        ["version"] = APP_VERSION,
+                        ["clientVersion"] = APP_VERSION,
+                        ["alpnet-pulse"] = APP_VERSION,
+                        ["last_seen"] = DateTime.UtcNow.ToString("o"),
+                        ["last_log"] = LastLog ?? "",
+                        ["last_error"] = LastError ?? "",
+                        ["warpActive"] = WarpActive,
+                        ["warp_active"] = WarpActive,
+                        ["machine_name"] = Environment.MachineName,
+                        ["pc_user"] = Environment.UserName,
+                        ["installedAppVersions"] = new Dictionary<string, string>
+                        {
+                            ["alpnet-pulse"] = APP_VERSION,
+                            ["alpnet"] = APP_VERSION
+                        }
+                    };
+                    string syncJson = JsonSerializer.Serialize(userSyncPatch);
+
+                    string targetKey = !string.IsNullOrEmpty(AlpTogetherUserId) ? AlpTogetherUserId : hwid;
+                    using (var atUserContent = new StringContent(syncJson, Encoding.UTF8, "application/json"))
+                    {
+                        await _http.PatchAsync(BuildFirebaseUrl($"alptogether/users/{targetKey}.json"), atUserContent);
+                    }
+
+                    if (!string.IsNullOrEmpty(AlpTogetherUserId) && !string.Equals(AlpTogetherUserId, hwid, StringComparison.OrdinalIgnoreCase))
+                    {
+                        using var hwidAtContent = new StringContent(syncJson, Encoding.UTF8, "application/json");
+                        await _http.PatchAsync(BuildFirebaseUrl($"alptogether/users/{hwid}.json"), hwidAtContent);
+                    }
+
+                    using (var legacyUserContent = new StringContent(syncJson, Encoding.UTF8, "application/json"))
+                    {
+                        await _http.PatchAsync(BuildFirebaseUrl($"users/{hwid}.json"), legacyUserContent);
+                    }
+                }
+                catch { }
 
                 _lastCloudFlush = DateTime.UtcNow;
                 Interlocked.Exchange(ref _pendingLogCount, 0);
